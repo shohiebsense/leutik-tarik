@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -144,6 +145,15 @@ type traceRow struct {
 	Depth int
 }
 
+// attrRow is one span attribute, flattened so the template can render a table
+// without iterating a map inside a range (which loses the span identity).
+type attrRow struct {
+	Span      string
+	SpanShort string
+	Key       string
+	Value     string
+}
+
 // Trace renders one trace as a summary plus a waterfall table.
 func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 	traceID := r.PathValue("traceID")
@@ -186,7 +196,25 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			correlated = append(correlated, l)
 		}
 	}
+	var attrs []attrRow
+	for _, row := range rows {
+		keys := make([]string, 0, len(row.Span.Attributes))
+		for k := range row.Span.Attributes {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			attrs = append(attrs, attrRow{
+				Span:      row.Span.Name,
+				SpanShort: shorten(row.Span.Name, 28),
+				Key:       k,
+				Value:     row.Span.Attributes[k],
+			})
+		}
+	}
+
 	render(w, traceView, map[string]any{
+		"Attributes": attrs,
 		"Title":      "Trace " + traceID,
 		"TraceID":    traceID,
 		"Rows":       rows,
@@ -652,6 +680,23 @@ const traceTemplate = `{{define "content"}}
 {{end}}
 {{else}}
 <p class="dim">No log snapshot for this operation. Nothing is captured unless a trigger fires.</p>
+{{end}}
+
+{{if .Attributes}}
+<h2>Span data</h2>
+<p class="dim">Every attribute recorded for each span — parameters, statement, peer. This is the evidence behind the rows above.</p>
+<table>
+<thead><tr><th>Span</th><th>Attribute</th><th>Value</th></tr></thead>
+<tbody>
+{{range .Attributes}}
+<tr>
+  <td title="{{.Span}}">{{.SpanShort}}</td>
+  <td><code>{{.Key}}</code></td>
+  <td>{{.Value}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
 {{end}}
 
 <details>

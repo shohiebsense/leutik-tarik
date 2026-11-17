@@ -151,6 +151,11 @@ spec:
               value: 2s
             - name: LEUTIK_MIN_SAMPLES
               value: "5"
+            # Statement text is kept so a slow span can be traced to its query.
+            # It contains member identifiers: credential redaction still applies,
+            # but treat this store as sensitive data. Set to "off" to redact SQL.
+            - name: LEUTIK_CAPTURE_SQL_TEXT
+              value: "on"
             - name: TMPDIR
               value: /tmp
           readinessProbe:

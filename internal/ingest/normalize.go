@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -41,7 +42,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 			ServiceVersion: r.resource["service.version"],
 			Environment:    r.resource["deployment.environment"],
 
-			Name:          r.name,
+			Name:          spanName(r),
 			Kind:          kindName(r.kind),
 			OperationType: operationType(r.attrs, r.name),
 
@@ -116,6 +117,17 @@ func provenance(attrs map[string]string, key, def string) string {
 		return v
 	}
 	return def
+}
+
+// spanName prefers the function/method that produced the span over the
+// instrumentation's generic name ("get", "incr", "/healthcheck"). A trace reads
+// as a code path when every span is a function name, and the original is kept in
+// an attribute rather than thrown away.
+func spanName(r rawSpan) string {
+	if fn := r.attrs["code.function"]; fn != "" {
+		return fn
+	}
+	return r.name
 }
 
 func firstOf(attrs map[string]string, keys ...string) string {
@@ -194,13 +206,20 @@ func outcome(statusCode, otlpStatus int) string {
 // and a query string contains member identifiers, phone numbers and transaction
 // numbers. Redacting on the way in is the only point where it can be guaranteed.
 var sensitiveAttrKeys = []string{
-	"db.query.text",
-	"db.statement",
 	"db.query.parameter",
 	"db.statement.parameter",
 	"http.request.body",
 	"http.response.body",
 }
+
+// sqlTextKeys are statement-bearing attributes. They are redacted unless
+// CaptureSQL is on, because a statement contains member identifiers, phone
+// numbers and transaction numbers - redacting on the way in is the only place
+// where that can be guaranteed.
+var sqlTextKeys = []string{"db.query.text", "db.statement"}
+
+// CaptureSQL keeps statement text. Off by default: safe unless asked.
+var CaptureSQL = os.Getenv("LEUTIK_CAPTURE_SQL_TEXT") == "on"
 
 // sensitiveKeyPrefixes catch families, e.g. db.query.parameter.0.
 var sensitiveKeyPrefixes = []string{
@@ -250,6 +269,11 @@ func redact(attrs map[string]string) int {
 
 func isSensitive(key string) bool {
 	k := strings.ToLower(key)
+	for _, sqlKey := range sqlTextKeys {
+		if k == sqlKey {
+			return !CaptureSQL
+		}
+	}
 	for _, exact := range sensitiveAttrKeys {
 		if k == exact {
 			return true
