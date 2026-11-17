@@ -20,6 +20,16 @@ echo "== importing into containerd =="
 docker save "$IMG" | ctr -n k8s.io images import - >/dev/null
 
 export KUBECONFIG=/etc/kubernetes/admin.conf
+
+echo "== applying manifests =="
+# The manifests are applied, not just the image: a deploy that only sets the
+# image silently ignores spec changes (env vars, probes, resources). That bug
+# hid LEUTIK_CAPTURE_SQL_TEXT for a whole rollout before it was noticed.
+for f in k8s/00-namespace.yaml k8s/10-clickhouse.yaml k8s/20-leutik-tarik.yaml; do
+  [ -f "$f" ] || { echo "missing $f"; exit 1; }
+  sed "s|IMAGE_PLACEHOLDER|$IMG|g" "$f" | kubectl apply -f - >/dev/null
+done
+
 echo "== rolling out =="
 # Both the init container (migrations) and the app must move together: a new app
 # against an old schema is exactly what the initContainer exists to prevent.

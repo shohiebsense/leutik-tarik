@@ -71,4 +71,7 @@ jobs:
           $SCP leutik-tarik              "$USER@$HOST:/opt/leutik-tarik/leutik-tarik"
           $SCP deploy/Dockerfile         "$USER@$HOST:/opt/leutik-tarik/Dockerfile"
           $SCP deploy/deploy-on-node.sh  "$USER@$HOST:/opt/leutik-tarik/deploy-on-node.sh"
+          # Manifests ship with the binary so spec changes actually apply.
+          $SSH "$USER@$HOST" "mkdir -p /opt/leutik-tarik/k8s"
+          $SCP deploy/k8s/*.yaml           "$USER@$HOST:/opt/leutik-tarik/k8s/"
           $SSH "$USER@$HOST" "IMAGE_TAG=sha-${GITHUB_SHA::7} bash /opt/leutik-tarik/deploy-on-node.sh"
