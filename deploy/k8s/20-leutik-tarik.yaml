@@ -1,0 +1,187 @@
+# The platform: Deployment + Service + ConfigMap (policy) + PVC (profile blobs).
+#
+# Runs as non-root with a read-only root filesystem. The profile directory is a
+# volume because pprof blobs are written there, and ClickHouse holds only their
+# metadata (build prompt §4).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: leutik-policy
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik}
+data:
+  policy.yaml: |
+    # Retention policy for leutik-tarik.
+    #
+    # Precedence: highest priority wins, then most specific match, then file
+    # order. Two rules may not tie on both (the loader refuses that).
+    #
+    # Routes are stored as the instrumentation reports them: otelgin sends
+    # Gin's form, /v1/payments/:id, not {id}. A rule written with braces never
+    # matches a Gin route; use ** globs.
+    version: 1
+
+    defaults:
+      trace: 14d
+
+    rules:
+      # Failures are the evidence an investigation needs.
+      - name: errors
+        priority: 100
+        match:
+          outcome: [error, server_error]
+        keep:
+          trace: 30d
+
+      - name: payment-write-errors
+        priority: 110
+        match:
+          route: ["/v1/payments/**", "/v1/period-pass/**"]
+          outcome: [error, server_error, client_error]
+        keep:
+          trace: 90d
+
+      # Slow successful requests are tomorrow's regression.
+      - name: slow-success
+        priority: 50
+        match:
+          outcome: [success]
+          min_duration: 2s
+        keep:
+          trace: 30d
+
+      # High-volume reads are cheap to lose.
+      - name: read-success
+        priority: 20
+        match:
+          http_method: [GET, HEAD]
+          outcome: [success]
+        keep:
+          trace: 2d
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: leutik-profiles
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests: {storage: 10Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leutik-tarik
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: leutik-tarik}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: leutik-tarik}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leutik-tarik
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: leutik-tarik}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  # One replica: ingestion writes and the in-memory log ring are per-process, so
+  # scaling out would split the ring until the ring moves to a shared store.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/name: leutik-tarik}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: leutik-tarik}
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        # Schema first, app second: the server refuses to start against a
+        # database it cannot read, and a failed migration must block the rollout
+        # rather than leave a pod serving 500s.
+        - name: migrate
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          args: ["-migrate"]
+          env:
+            - name: LEUTIK_CLICKHOUSE_URL
+              value: http://clickhouse:8123
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: leutik-tarik
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: LEUTIK_ADDR
+              value: 0.0.0.0:8080   # the pod network is private; Caddy fronts it
+            - name: LEUTIK_CLICKHOUSE_URL
+              value: http://clickhouse:8123
+            - name: LEUTIK_POLICY_PATH
+              value: /etc/leutik/policy.yaml
+            - name: LEUTIK_PROFILES_DIR
+              value: /var/lib/leutik/profiles
+            # "Worth checking" thresholds, so the verdict is visible without
+            # anyone having to ask.
+            - name: LEUTIK_SLOW_MEDIAN
+              value: 1s
+            - name: LEUTIK_SLOW_P95
+              value: 2s
+            - name: LEUTIK_MIN_SAMPLES
+              value: "5"
+            - name: TMPDIR
+              value: /tmp
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/leutik
+              readOnly: true
+            - name: profiles
+              mountPath: /var/lib/leutik/profiles
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: policy
+          configMap:
+            name: leutik-policy
+        - name: profiles
+          persistentVolumeClaim:
+            claimName: leutik-profiles
+        - name: tmp
+          emptyDir: {}

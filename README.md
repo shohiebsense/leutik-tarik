@@ -78,6 +78,19 @@ Rules set retention per span at ingest (failures longest, high-volume reads
 shortest). `/policies` shows the effective config and what each rule would claim
 in the last 24h. See `docs/policies.md`.
 
+## Kubernetes (this is how it runs on Jupler)
+
+```sh
+kubectl apply -f deploy/k8s/00-namespace.yaml
+kubectl apply -f deploy/k8s/10-clickhouse.yaml
+kubectl apply -f deploy/k8s/20-leutik-tarik.yaml   # set the image tag first
+```
+
+Namespace `leutik-system`: ClickHouse StatefulSet + PVC, platform Deployment +
+ClusterIP Service + policy ConfigMap + profiles PVC. Nothing is published on the
+node; the Caddy ingress block for `leutik-tarik.komuterku.com` is the only path
+in. Details and trade-offs: `deploy/k8s/README.md`.
+
 ## Run against ClickHouse (S4/S5 — dedupe, per-row retention, bloom index)
 
 ```sh

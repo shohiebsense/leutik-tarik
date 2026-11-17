@@ -1,0 +1,71 @@
+# ClickHouse for leutik-tarik.
+#
+# CLICKHOUSE_SKIP_USER_SETUP keeps the dev instance password-less. It is only
+# reachable on the ClusterIP Service below (never a NodePort or Ingress), so the
+# exposure is limited to the cluster network. A production install should set a
+# password and run with auth enabled.
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: clickhouse}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: clickhouse}
+  ports:
+    - name: http
+      port: 8123
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: clickhouse}
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: clickhouse}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: leutik-tarik, app.kubernetes.io/name: clickhouse}
+    spec:
+      securityContext:
+        fsGroup: 101
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:26.10
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLICKHOUSE_SKIP_USER_SETUP
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8123
+            - name: native
+              containerPort: 9000
+          readinessProbe:
+            httpGet: {path: /ping, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /ping, port: http}
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: {storage: 20Gi}

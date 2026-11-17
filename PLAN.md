@@ -102,6 +102,14 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       raise a flag). No upload, no profiling, no configuration required.
       6 unit tests covering slow-once, slow median, spiky p95, failing rate,
       fast, and ordering. Verified in the browser against seeded traffic.
+- [x] **S19 deployed on Jupler (in-cluster)** — `leutik-system` namespace:
+      ClickHouse StatefulSet + 20Gi PVC, platform Deployment + ClusterIP Service
+      + policy ConfigMap + 10Gi profiles PVC, migration as an initContainer.
+      Reachable only through the Caddy block for
+      `leutik-tarik.komuterku.com`; nothing is published on the node. Verified
+      through the ingress: 302 to /operations, /services and /policies 200,
+      POST /v1/traces 200. The host systemd unit and docker ClickHouse were
+      removed afterwards.
 - [ ] **S15 method + route from probes** — needs per-Go-version struct offsets
       (the OBI-style work); timebox and keep `completeness=partial` until then.
 
