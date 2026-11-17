@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/otlpjson"
 )
@@ -34,11 +35,14 @@ func TestDecodeJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeJSON: %v", err)
 	}
-	spans, stats := normalize(rs)
-	if len(spans) != 1 {
-		t.Fatalf("want 1 span, got %d", len(spans))
+	records, stats := normalize(rs, time.Now())
+	if len(records) != 1 {
+		t.Fatalf("want 1 record, got %d", len(records))
 	}
-	s := spans[0]
+	s := records[0].Span
+	if records[0].Decision.PolicyID == "" {
+		t.Error("policy id not recorded")
+	}
 	if s.ServiceName != "payment" {
 		t.Errorf("service = %q", s.ServiceName)
 	}

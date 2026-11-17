@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/shohiebsense/leutik-tarik/internal/model"
 	"github.com/shohiebsense/leutik-tarik/internal/otlpjson"
 )
 
@@ -31,11 +32,23 @@ func decodeJSON(body []byte) ([]rawSpan, error) {
 					end:          timeFromNanos(sp.EndTimeUnixNano),
 					statusCode:   sp.Status.Code,
 					statusMsg:    sp.Status.Message,
+					links:        jsonLinks(sp.Links),
 				})
 			}
 		}
 	}
 	return out, nil
+}
+
+func jsonLinks(links []otlpjson.SpanLink) []model.Link {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make([]model.Link, 0, len(links))
+	for _, l := range links {
+		out = append(out, model.Link{TraceID: l.TraceID, SpanID: l.SpanID})
+	}
+	return out
 }
 
 // jsonAttrs keeps every scalar type and counts what it cannot represent, so

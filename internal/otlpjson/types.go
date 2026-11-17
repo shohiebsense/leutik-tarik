@@ -40,6 +40,13 @@ type Span struct {
 	EndTimeUnixNano   string      `json:"endTimeUnixNano"`
 	Attributes        []Attribute `json:"attributes"`
 	Status            Status      `json:"status"`
+	Links             []SpanLink  `json:"links"`
+}
+
+// SpanLink is a related span that is not a parent (async produce/consume).
+type SpanLink struct {
+	TraceID string `json:"traceId"`
+	SpanID  string `json:"spanId"`
 }
 
 // Status is the OTLP span status (code: 0 unset, 1 ok, 2 error).

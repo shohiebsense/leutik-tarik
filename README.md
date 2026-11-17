@@ -14,7 +14,22 @@ ingest, the ClickHouse store, and the instrumentation agent are still missing.
 See `PLAN.md` for the corrected status and `docs/review-2026-11-17.md` for the
 full findings list.
 
-## Run (slice 1, memory store)
+## Run against ClickHouse (S4/S5 — dedupe, per-row retention, bloom index)
+
+```sh
+make db-up                                  # ClickHouse 26.10 on 127.0.0.1:8123
+LEUTIK_CLICKHOUSE_URL=http://127.0.0.1:8123 make migrate
+LEUTIK_CLICKHOUSE_URL=http://127.0.0.1:8123 go run ./cmd/leutik-tarik
+go run ./cmd/demo-sender -proto -gzip       # what a real exporter sends
+```
+
+Integration tests skip themselves unless the endpoint is set:
+
+```sh
+LEUTIK_CLICKHOUSE_URL=http://127.0.0.1:8123 go test ./internal/store/ -v
+```
+
+## Run with no dependencies (memory store)
 
 ```sh
 # Go 1.26+ is required (the OTLP proto module requires it).

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
@@ -62,16 +63,16 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	spans, stats := normalize(raw)
-	if len(spans) > 0 {
-		if err := h.Store.InsertSpans(r.Context(), spans); err != nil {
+	records, stats := normalize(raw, time.Now().UTC())
+	if len(records) > 0 {
+		if err := h.Store.Insert(r.Context(), records); err != nil {
 			http.Error(w, "store: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
 	h.logf("otlp ingest format=%s encoding=%s decompressed_bytes=%d spans=%d dropped_attrs=%d redacted=%d",
-		kind, encodingOrDefault(encoding), len(body), len(spans), stats.droppedAttrs, stats.redacted)
+		kind, encodingOrDefault(encoding), len(body), len(records), stats.droppedAttrs, stats.redacted)
 
 	writeSuccess(w, kind)
 }

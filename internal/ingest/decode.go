@@ -8,6 +8,8 @@ import (
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/shohiebsense/leutik-tarik/internal/model"
 )
 
 // rawSpan is the encoding-neutral intermediate: both decoders produce it and
@@ -27,6 +29,7 @@ type rawSpan struct {
 	end          time.Time
 	statusCode   int
 	statusMsg    string
+	links        []model.Link
 }
 
 func marshalEmptyResponse() []byte {
@@ -68,6 +71,7 @@ func decodeProto(body []byte) ([]rawSpan, error) {
 					end:          time.Unix(0, int64(sp.GetEndTimeUnixNano())),
 					statusCode:   int(sp.GetStatus().GetCode()),
 					statusMsg:    sp.GetStatus().GetMessage(),
+					links:        protoLinks(sp.GetLinks()),
 				})
 			}
 		}
@@ -107,6 +111,21 @@ func protoValue(v *commonv1.AnyValue) (string, bool) {
 		// Arrays and kvlists are counted as dropped, not guessed at.
 		return "", false
 	}
+}
+
+// protoLinks keeps async parentage as links, never as fabricated parents.
+func protoLinks(links []*tracev1.Span_Link) []model.Link {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make([]model.Link, 0, len(links))
+	for _, l := range links {
+		out = append(out, model.Link{
+			TraceID: hexFromBytes(l.GetTraceId()),
+			SpanID:  hexFromBytes(l.GetSpanId()),
+		})
+	}
+	return out
 }
 
 func hexFromBytes(b []byte) string {
