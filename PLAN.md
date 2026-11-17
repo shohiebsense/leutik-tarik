@@ -72,11 +72,14 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       Two bugs found and locked by tests: rows collapsing on identical
       timestamps, and correlated lines being unreachable by trace id.
       See `docs/log-snapshots.md`.
-- [ ] **S7 agent (Phase 1c) net/http spans** — the hard slice. Attach works;
-      the unsolved part is reading `net/http` arguments under Go's register ABI
-      (per-Go-version knowledge, the reason OBI is its own project). Timebox it:
-      prove one Go version first, then decide on a compatibility matrix.
-      See `docs/agent-portability.md`.
+- [x] **S13 Go uprobe mechanism (1c-3a)** — register-ABI argument reading
+      **works**: `main.mark(4242)` → `arg0=4242`, and
+      `net/http.(*response).WriteHeader` yields `503` from an uninstrumented
+      server. The uncertain part is settled; what remains is struct-offset work
+      (method/route) which is per-Go-version — `docs/go-instrumentation.md`.
+- [ ] **S14 full HTTP spans (1c-3b)** — assemble status+duration spans from
+      uprobes (`completeness=partial`, no method/route yet), then add method and
+      route via per-version offsets.
 
 ## Found while implementing (must not be forgotten)
 
