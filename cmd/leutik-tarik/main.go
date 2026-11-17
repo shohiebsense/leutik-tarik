@@ -75,16 +75,28 @@ func main() {
 // pickPolicy loads the retention policy. A malformed policy is fatal: silently
 // falling back to defaults would change how long evidence is kept without
 // telling anyone.
+// pickPolicy loads the retention policy. A *broken* policy is fatal: silently
+// falling back would change how long evidence is kept without telling anyone. A
+// *missing* policy is not an error — a fresh install has no config yet — so it
+// falls back to the built-in defaults and says so loudly.
 func pickPolicy() *policy.Engine {
 	path := os.Getenv("LEUTIK_POLICY_PATH")
+	explicit := path != ""
 	if path == "" {
 		path = "config/policy.yaml"
 		if _, err := os.Stat(path); err != nil {
 			path = "config/policy.example.yaml"
 		}
 	}
+
 	p, err := policy.Load(path)
 	if err != nil {
+		if !explicit && os.IsNotExist(err) {
+			def := policy.Default().Policy()
+			log.Printf("no policy file found at %s; using built-in defaults (trace retention %s). Set LEUTIK_POLICY_PATH to change it.",
+				path, def.Defaults.Trace.Duration())
+			return policy.Default()
+		}
 		log.Fatalf("policy %s: %v", path, err)
 	}
 	log.Printf("policy %s loaded: version %d, %d rules, default trace retention %s",

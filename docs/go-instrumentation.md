@@ -1,6 +1,7 @@
 # Go instrumentation through uprobes — what works, what doesn't
 
-Status: **mechanism proven, full HTTP spans not built.** This document records
+Status: **partial HTTP spans shipping** — status and duration captured from an
+uninstrumented server, method/route still missing (see below). This document records
 the measurements so the next session does not repeat the research.
 
 ## The question this answers
@@ -25,6 +26,31 @@ So the two things that were genuinely uncertain are settled:
 2. Go binaries expose symbol names well enough that stdlib methods can be
    probed by name (`net/http.(*response).WriteHeader`), with no build tags and
    no app changes.
+
+## Shipping now: partial spans (measured 2026-11-18)
+
+`leutik-agent -http-binary <path>` attaches to `net/http.serverHandler.ServeHTTP`
+(entry, start time) and `net/http.(*response).WriteHeader` (status + elapsed),
+and emits one span per completed request.
+
+Measured against an uninstrumented server, 3x `/fail` (503) and 3x `/ok` (200):
+
+```
+service      name                  outcome  completeness  source  ms
+probe-http   http request (probe)  error    partial       agent   0.023
+probe-http   http request (probe)  success  partial       agent   0.010
+... 6 spans, all partial/agent
+```
+
+The spans carry `leutik.capture.missing = http.request.method,http.route` and
+`leutik.capture.correlation = os-thread`, so a reader is told what the probe did
+not see rather than left to infer it.
+
+**Correlation weakness, stated plainly:** start and finish are matched by OS
+thread id, and Go may migrate a goroutine between threads mid-call. Under heavy
+concurrency a duration can therefore pair with the wrong request. Fixing that
+needs a goroutine id, which means reading runtime internals — the same work that
+unlocks method and route.
 
 ## What is NOT solved yet
 

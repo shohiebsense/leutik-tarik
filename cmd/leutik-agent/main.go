@@ -21,10 +21,21 @@ func main() {
 	discoverOnly := flag.Bool("discover", false, "only list discovered services")
 
 	probeBinary := flag.String("probe-binary", "", "attach a uprobe to this executable and stream events")
+	httpBinary := flag.String("http-binary", "", "observe net/http status+duration in this executable (no app changes)")
 	probeSymbol := flag.String("probe-symbol", "main.fire", "symbol name to probe")
 	emitURL := flag.String("emit", envOr("LEUTIK_ADDR", "http://127.0.0.1:8080"), "ingest base URL for probe events")
 	probeService := flag.String("service", "leutik-probe", "service.name reported for probe events")
 	flag.Parse()
+
+	if *httpBinary != "" {
+		if err := runHTTPProbe(probeConfig{
+			Binary: *httpBinary, EmitURL: *emitURL, Service: *probeService,
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "http probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *probeBinary != "" {
 		if err := runProbe(probeConfig{

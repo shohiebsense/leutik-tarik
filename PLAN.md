@@ -77,9 +77,14 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       `net/http.(*response).WriteHeader` yields `503` from an uninstrumented
       server. The uncertain part is settled; what remains is struct-offset work
       (method/route) which is per-Go-version — `docs/go-instrumentation.md`.
-- [ ] **S14 full HTTP spans (1c-3b)** — assemble status+duration spans from
-      uprobes (`completeness=partial`, no method/route yet), then add method and
-      route via per-version offsets.
+- [x] **S14 partial HTTP spans (1c-3b)** — `leutik-agent -http-binary`: entry
+      uprobe on `serverHandler.ServeHTTP` + `(*response).WriteHeader` yields one
+      span per request with status and measured duration, from a binary with no
+      instrumentation. Verified end-to-end: 6 requests -> 6 spans
+      (`completeness=partial`, `source=agent`), outcomes correct.
+      Remaining: method/route (per-Go-version offsets), goroutine-id correlation.
+- [ ] **S15 method + route from probes** — needs per-Go-version struct offsets
+      (the OBI-style work); timebox and keep `completeness=partial` until then.
 
 ## Found while implementing (must not be forgotten)
 

@@ -111,3 +111,47 @@ func hexString(b []byte) string {
 	}
 	return string(out)
 }
+
+// HTTPSpan converts a probe-observed request into an OTLP span.
+//
+// It reports completeness=partial because method and route are unknown: the
+// probe saw a status and a duration, not a request. Naming the span by what was
+// actually measured keeps the UI from implying more.
+func HTTPSpan(e HTTPEvent, service string, start time.Time) otlpjson.Span {
+	status := fmt.Sprint(e.Status)
+	span := otlpjson.Span{
+		TraceID:           pseudoTraceID(e.TGID),
+		SpanID:            pseudoSpanID(e.TGID, start),
+		Name:              "http request (probe)",
+		Kind:              2, // server
+		StartTimeUnixNano: fmt.Sprint(start.UnixNano()),
+		EndTimeUnixNano:   fmt.Sprint(start.Add(e.Duration()).UnixNano()),
+		Attributes: []otlpjson.Attribute{
+			{Key: "process.pid", Value: otlpjson.Value{IntValue: fmt.Sprint(e.TGID)}},
+			{Key: "process.command", Value: otlpjson.Value{StringValue: e.CommString()}},
+			{Key: "http.response.status_code", Value: otlpjson.Value{IntValue: status}},
+			{Key: "leutik.capture.source", Value: otlpjson.Value{StringValue: "agent"}},
+			{Key: "leutik.capture.completeness", Value: otlpjson.Value{StringValue: "partial"}},
+			// Say what is missing rather than leaving a reader to wonder.
+			{Key: "leutik.capture.missing", Value: otlpjson.Value{StringValue: "http.request.method,http.route"}},
+			{Key: "leutik.capture.correlation", Value: otlpjson.Value{StringValue: "os-thread"}},
+		},
+	}
+	if e.Status >= 500 {
+		span.Status = otlpjson.Status{Code: 2, Message: status}
+	}
+	return span
+}
+
+// HTTPRequest wraps a probe-observed request into the OTLP envelope.
+func HTTPRequest(e HTTPEvent, service string, start time.Time) otlpjson.ExportTraceRequest {
+	return otlpjson.ExportTraceRequest{
+		ResourceSpans: []otlpjson.ResourceSpans{{
+			Resource: otlpjson.Resource{Attributes: []otlpjson.Attribute{
+				{Key: "service.name", Value: otlpjson.Value{StringValue: service}},
+				{Key: "telemetry.sdk.name", Value: otlpjson.Value{StringValue: "leutik-agent"}},
+			}},
+			ScopeSpans: []otlpjson.ScopeSpans{{Spans: []otlpjson.Span{HTTPSpan(e, service, start)}}},
+		}},
+	}
+}

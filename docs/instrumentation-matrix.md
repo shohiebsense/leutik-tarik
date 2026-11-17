@@ -13,7 +13,7 @@ Capability states: **complete** / **partial** / **correlated** / **unsupported**
 | Asynq / queue workers | B + span links | planned | producer/consumer via trace context where safe |
 | OTLP SDK apps | D (ingest) | **working** | accepts OTLP/HTTP protobuf+JSON, plain or gzip |
 | eBPF uprobe (function entry) | C | **partial** | attach + event delivery proven; no argument/route reading yet |
-| Go `net/http` via uprobe | C | **partial** | status code and duration are reachable (register ABI proven, 503 read from an uninstrumented server); method/route need per-Go-version struct offsets. See `docs/go-instrumentation.md` |
+| Go `net/http` via uprobe | C | **partial** | status + duration captured from an uninstrumented server (`-http-binary`), stored as `completeness=partial`; method/route need per-Go-version struct offsets. See `docs/go-instrumentation.md` |
 | Python / other runtimes | — | unsupported | not in initial scope; matrix grows per phase |
 
 ## Current proof (slice 1)

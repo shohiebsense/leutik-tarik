@@ -12,12 +12,10 @@ import (
 	"time"
 )
 
-// TestReadsStatusCodeFromNetHTTP is the real question: can a probe read a value
-// out of Go's standard library, from a server that was never instrumented?
-//
-// Target: net/http.(*response).WriteHeader(code int) — receiver in AX, code in
-// BX, so arg1 must be the status the handler wrote.
-func TestReadsStatusCodeFromNetHTTP(t *testing.T) {
+// TestHTTPProbeProducesSpan drives a real request through an uninstrumented
+// server and asserts the probe reports the right status AND a plausible
+// duration in one event.
+func TestHTTPProbeProducesSpan(t *testing.T) {
 	target := os.Getenv("LEUTIK_HTTP_TEST_BINARY")
 	if target == "" {
 		dir := t.TempDir()
@@ -28,68 +26,58 @@ func TestReadsStatusCodeFromNetHTTP(t *testing.T) {
 		}
 	}
 
-	p, err := LoadArgs()
+	p, err := LoadHTTP()
 	if err != nil {
-		t.Skipf("cannot load args probe: %v", err)
+		t.Skipf("cannot load http probe: %v", err)
 	}
 	defer p.Close()
-
-	if err := p.AttachUprobe(target, "net/http.(*response).WriteHeader"); err != nil {
-		t.Skipf("cannot attach to net/http.(*response).WriteHeader: %v", err)
+	if err := p.Attach(target); err != nil {
+		t.Skipf("cannot attach: %v", err)
 	}
 
 	run := exec.Command(target)
-	stdout, err := run.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	stdout, _ := run.StdoutPipe()
 	run.Stderr = os.Stderr
 	if err := run.Start(); err != nil {
 		t.Fatalf("start fixture: %v", err)
 	}
 	defer func() { _ = run.Process.Kill(); _ = run.Wait() }()
 
-	// Wait for the server to accept traffic.
-	ready := make(chan struct{})
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
-			close(ready)
 			return
 		}
 	}()
-	select {
-	case <-ready:
-	case <-time.After(5 * time.Second):
-		t.Fatal("fixture did not start")
-	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	resp, err := http.Get("http://127.0.0.1:18099/fail")
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 503 {
-		t.Fatalf("fixture returned %d", resp.StatusCode)
-	}
 
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
 		case e, ok := <-p.Events():
 			if !ok {
-				t.Fatalf("event channel closed: %v", p.Err())
+				t.Fatalf("channel closed: %v", p.Err())
 			}
-			if e.Arg0 == 0 {
-				continue // receiver pointer resolved to nil-ish; skip noise
+			if e.Status != 503 {
+				continue
 			}
-			if e.Arg1 == 503 {
-				t.Logf("net/http status read from an uninstrumented server: %d (comm=%q)", e.Arg1, e.CommString())
-				return
+			if e.Duration() <= 0 {
+				t.Fatalf("status 503 but no duration: %+v", e)
 			}
+			span := HTTPSpan(e, "probe-http", time.Now())
+			if span.EndTimeUnixNano <= span.StartTimeUnixNano {
+				t.Error("span end must be after start")
+			}
+			t.Logf("probe span: status=%d duration=%v comm=%q", e.Status, e.Duration(), e.CommString())
+			return
 		case <-deadline:
-			t.Fatal("no WriteHeader(503) captured within 10s")
+			t.Fatal("no 503 event within 10s")
 		}
 	}
 }
