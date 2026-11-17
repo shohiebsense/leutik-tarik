@@ -30,7 +30,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 		redacted := redact(r.attrs)
 		stats.redacted += redacted
 
-		statusCode := intAt(r.attrs, "http.response.status_code")
+		statusCode := intOf(r.attrs, "http.response.status_code", "http.status_code")
 		outcome := outcome(statusCode, r.statusCode)
 
 		span := model.Span{
@@ -46,7 +46,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 			Kind:          kindName(r.kind),
 			OperationType: operationType(r.attrs, r.name),
 
-			HTTPMethod: r.attrs["http.request.method"],
+			HTTPMethod: firstOf(r.attrs, "http.request.method", "http.method"),
 			HTTPRoute:  r.attrs["http.route"],
 			StatusCode: statusCode,
 
@@ -63,17 +63,17 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 			MessagingDestination: firstOf(r.attrs, "messaging.destination.name", "messaging.destination"),
 			MessagingOperation:   firstOf(r.attrs, "messaging.operation.type", "messaging.operation"),
 
-			HostName:      r.attrs["host.name"],
+			HostName:      firstOf(r.attrs, "host.name", "net.host.name"),
 			PodName:       r.attrs["k8s.pod.name"],
 			Namespace:     r.attrs["k8s.namespace.name"],
 			ContainerName: r.attrs["container.name"],
-			PeerService:   r.attrs["peer.service"],
+			PeerService:   firstOf(r.attrs, "peer.service", "net.peer.name", "server.address"),
 
 			StartTime: r.start,
 			EndTime:   r.end,
 			Duration:  r.end.Sub(r.start),
 
-			ErrorType:     r.attrs["error.type"],
+			ErrorType:     firstOf(r.attrs, "error.type", "error"),
 			Outcome:       outcome,
 			StatusMessage: r.statusMsg,
 			Attributes:    r.attrs,
@@ -151,7 +151,7 @@ func operationType(attrs map[string]string, name string) string {
 	case attrs["messaging.system"] != "":
 		return "queue"
 	}
-	switch strings.ToUpper(attrs["http.request.method"]) {
+	switch strings.ToUpper(firstOf(attrs, "http.request.method", "http.method")) {
 	case "GET", "HEAD", "OPTIONS":
 		return "read"
 	case "POST", "PUT", "PATCH", "DELETE":
@@ -173,11 +173,29 @@ func timeFromNanos(s string) time.Time {
 }
 
 func intAt(m map[string]string, key string) int {
+	if key == "" {
+		return 0
+	}
 	n, err := strconv.Atoi(m[key])
 	if err != nil {
 		return 0
 	}
 	return n
+}
+
+// intOf reads the first integer-valued attribute that is present, across naming
+// generations. Returning the value (not the key) is the point: intAt takes a key.
+func intOf(attrs map[string]string, keys ...string) int {
+	for _, k := range keys {
+		v, ok := attrs[k]
+		if !ok || v == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 // outcome classifies the span. otlpStatus is the OTLP status code: 0 unset,

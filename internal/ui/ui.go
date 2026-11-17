@@ -585,21 +585,20 @@ const operationsTemplate = `{{define "content"}}
   <button type="submit">Search</button>
 </form>
 <table>
-<thead><tr><th>Time</th><th>Service</th><th>Method</th><th>Route</th><th>Status</th><th>Duration</th><th>Outcome</th><th>Trace</th></tr></thead>
+<thead><tr><th>Time</th><th>Service</th><th>Route</th><th>Status</th><th>Duration</th><th>Outcome</th><th>Trace</th></tr></thead>
 <tbody>
 {{range .Spans}}
 <tr>
   <td>{{ts .StartTime}}</td>
   <td>{{.ServiceName}}</td>
-  <td>{{.HTTPMethod}}</td>
-  <td>{{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}</td>
+  <td>{{if .HTTPMethod}}<b>{{.HTTPMethod}}</b> {{end}}{{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}</td>
   <td>{{if .StatusCode}}{{.StatusCode}}{{else}}—{{end}}</td>
   <td>{{dur .Duration}}</td>
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{end}}">{{.Outcome}}</td>
   <td><a href="/traces/{{.TraceID}}">trace</a></td>
 </tr>
 {{else}}
-<tr><td colspan="8" class="dim">No operations in this window.</td></tr>
+<tr><td colspan="7" class="dim">No operations in this window.</td></tr>
 {{end}}
 </tbody>
 </table>

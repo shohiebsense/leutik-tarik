@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/model"
 	"github.com/shohiebsense/leutik-tarik/internal/otlpjson"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
 )
@@ -229,5 +230,55 @@ func TestSQLTextIsNeverStored(t *testing.T) {
 	}
 	if n < 4 {
 		t.Errorf("redacted count = %d, want >= 4", n)
+	}
+}
+
+// SDKs still emit the old semantic conventions (http.method, http.status_code).
+// Reading only the new names silently produced empty methods and a zero status,
+// which made every successful request look like "unknown".
+func TestSemconvGenerationsBothWork(t *testing.T) {
+	old := []rawSpan{{
+		resource: map[string]string{"service.name": "api"},
+		attrs: map[string]string{
+			"http.method":      "POST",
+			"http.status_code": "503",
+			"http.route":       "/v1/payments/:id",
+			"net.host.name":    "api.internal",
+			"net.peer.name":    "postgres",
+		},
+		traceID: "aa", spanID: "bb",
+	}}
+	records, _ := normalize(old, time.Now(), nil)
+	s := records[0].Span
+	if s.HTTPMethod != "POST" {
+		t.Errorf("method = %q, want POST (old semconv)", s.HTTPMethod)
+	}
+	if s.StatusCode != 503 {
+		t.Errorf("status = %d, want 503", s.StatusCode)
+	}
+	if s.Outcome != model.OutcomeServerError {
+		t.Errorf("outcome = %q, want server_error", s.Outcome)
+	}
+	if s.HostName != "api.internal" || s.PeerService != "postgres" {
+		t.Errorf("host/peer = %q/%q", s.HostName, s.PeerService)
+	}
+	if s.OperationType != "write" {
+		t.Errorf("operation type = %q", s.OperationType)
+	}
+
+	// New names must keep working too.
+	nw := []rawSpan{{
+		resource: map[string]string{},
+		attrs: map[string]string{
+			"http.request.method":       "GET",
+			"http.response.status_code": "200",
+		},
+		traceID: "cc", spanID: "dd",
+	}}
+	got := records[0].Span
+	_ = got
+	r2, _ := normalize(nw, time.Now(), nil)
+	if r2[0].Span.HTTPMethod != "GET" || r2[0].Span.StatusCode != 200 {
+		t.Errorf("new semconv broke: %+v", r2[0].Span)
 	}
 }
