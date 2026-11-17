@@ -96,6 +96,12 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       Also fixed on the policies page: durations as 14d not 336h0m0s, real
       selector text, real YAML source; and the truncated time inputs.
       Verified in a real browser (Chromium, screenshots).
+- [x] **S18 automated "worth checking" verdict** — `/services` leads with the
+      flagged endpoints, derived from all hits in the window (median / p95 /
+      error-rate rules, minimum sample count so a single slow request cannot
+      raise a flag). No upload, no profiling, no configuration required.
+      6 unit tests covering slow-once, slow median, spiky p95, failing rate,
+      fast, and ordering. Verified in the browser against seeded traffic.
 - [ ] **S15 method + route from probes** — needs per-Go-version struct offsets
       (the OBI-style work); timebox and keep `completeness=partial` until then.
 

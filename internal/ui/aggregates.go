@@ -36,6 +36,9 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		grandTotal += e.Total
 	}
 
+	cfg := u.Verdicts()
+	flagged := cfg.Flag(endpoints)
+
 	// Worst error rate first, so the broken thing is at the top.
 	var totalSpans, totalErrors int64
 	for _, s := range rows {
@@ -53,6 +56,9 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		"Endpoints":   endpoints,
 		"GrandTotal":  grandTotal,
 		"Share":       shareOf,
+		"Flagged":     flagged,
+		"Config":      cfg,
+		"Judgements":  judgementIndex(cfg, endpoints),
 	})
 }
 
@@ -87,6 +93,23 @@ func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 		"Max":     max,
 		"Classes": severityClass,
 	})
+}
+
+// Verdicts returns the configured thresholds, falling back to the defaults.
+func (u UI) Verdicts() VerdictConfig {
+	if u.VerdictCfg == nil {
+		return VerdictConfigFromEnv()
+	}
+	return *u.VerdictCfg
+}
+
+// judgementIndex lets the endpoint table show the verdict per row.
+func judgementIndex(cfg VerdictConfig, endpoints []store.EndpointStat) map[string]Verdict {
+	out := make(map[string]Verdict, len(endpoints))
+	for _, e := range endpoints {
+		out[e.Service+"|"+e.Method+"|"+e.Route] = cfg.Judge(e)
+	}
+	return out
 }
 
 // shareOf renders one endpoint's slice of the total latency budget.

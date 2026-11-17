@@ -22,6 +22,25 @@ lines that carried the trace id separately from lines that were merely
 time-correlated. See `docs/log-snapshots.md`. Disable with
 `LEUTIK_LOG_CAPTURE=off`.
 
+## The verdict needs no setup
+
+`/services` opens with **"N endpoint(s) worth checking"**. It is derived from
+ordinary traffic — no upload, no profile, no configuration:
+
+- every hit in the window is counted, and the **median** and **p95** are computed
+  across all of them (median, not mean, so one 30s outlier cannot condemn a fast
+  endpoint)
+- an endpoint is flagged when median > **1s**, or p95 > **2s**, or ≥5% failures
+- it needs at least **5 hits** before judging; below that it says
+  *"too few hits"* rather than guessing
+
+Thresholds: `LEUTIK_SLOW_MEDIAN` (default `1s`), `LEUTIK_SLOW_P95` (default
+`2s`), `LEUTIK_MIN_SAMPLES` (default `5`).
+
+That is the difference between statistics and anecdote: a 9s request seen once
+ranks high by total time but is labelled *too few hits*, while a 1.4s endpoint
+seen twenty times is flagged.
+
 ## What you can see
 
 | Page | Answers |

@@ -19,6 +19,9 @@ type UI struct {
 
 	// Policies drives the effective-config view and the retention preview.
 	Policies *policy.Engine
+	// VerdictCfg is the "is this worth checking" rule. Nil reads the
+	// environment, so the platform works with no configuration.
+	VerdictCfg *VerdictConfig
 
 	// now is injectable so time ranges are testable.
 	now func() time.Time
@@ -256,6 +259,13 @@ var funcs = template.FuncMap{
 	"class":  func(outcome string) string { return severityClass(outcome) },
 	"share":  func(e store.EndpointStat, grand time.Duration) float64 { return shareOf(e, grand) },
 	"inc":    func(i int) int { return i + 1 },
+	"short":  shortDur,
+	"verdictState": func(e store.EndpointStat, idx map[string]Verdict) string {
+		return idx[e.Service+"|"+e.Method+"|"+e.Route].State
+	},
+	"verdictLabel": func(e store.EndpointStat, idx map[string]Verdict) string {
+		return idx[e.Service+"|"+e.Method+"|"+e.Route].Label
+	},
 	"div": func(a, b float64) float64 {
 		if b == 0 {
 			return 0
@@ -396,6 +406,29 @@ const profileDetailTemplate = `{{define "content"}}
 {{end}}`
 
 const servicesTemplate = `{{define "content"}}
+{{if .Flagged}}
+<h2>{{len .Flagged}} endpoint(s) worth checking</h2>
+<p class="dim">Derived from all hits in the window: median above {{short .Config.SlowMedian}}, p95 above {{short .Config.SlowP95}}, or ≥5% failures. Needs at least {{.Config.MinSamples}} hits before judging, so a single slow request cannot raise a flag.</p>
+<table>
+<thead><tr><th>Endpoint</th><th>Why</th><th>Hits</th><th>Median</th><th>p95</th><th>Errors</th></tr></thead>
+<tbody>
+{{range .Flagged}}
+<tr>
+  <td><b>{{if .Endpoint.Method}}{{.Endpoint.Method}} {{end}}{{.Endpoint.Route}}</b><br><span class="dim">{{.Endpoint.Service}}</span></td>
+  <td class="{{if eq .Verdict.State "failing"}}bad{{else}}warn{{end}}">{{.Verdict.Reason}}</td>
+  <td>{{.Endpoint.Count}}</td>
+  <td>{{short .Endpoint.P50}}</td>
+  <td>{{short .Endpoint.P95}}</td>
+  <td class="{{if gt .Endpoint.Errors 0}}bad{{end}}">{{.Endpoint.Errors}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<h2>Nothing worth checking</h2>
+<p class="dim">No endpoint exceeded the thresholds in this window (median ≤ {{short .Config.SlowMedian}}, p95 ≤ {{short .Config.SlowP95}}, &lt;5% failures, ≥{{.Config.MinSamples}} hits).</p>
+{{end}}
+
 <p class="dim">{{human .Window}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
 
 <table>
@@ -424,7 +457,7 @@ const servicesTemplate = `{{define "content"}}
 <h2>Top endpoints by total time</h2>
 <p class="dim">Ranked by the time this endpoint consumed in the window (count × duration), not by its worst single request. This is the order to tune in: the top row is where the latency budget actually goes.</p>
 <table>
-<thead><tr><th>#</th><th>Endpoint</th><th>Service</th><th>Requests</th><th>Total time</th><th>Share</th><th>p50</th><th>p95</th><th>Errors</th></tr></thead>
+<thead><tr><th>#</th><th>Endpoint</th><th>Service</th><th>Requests</th><th>Total time</th><th>Share</th><th>Median</th><th>p95</th><th>Errors</th><th>Verdict</th></tr></thead>
 <tbody>
 {{range $i, $e := .Endpoints}}
 <tr>
@@ -440,6 +473,7 @@ const servicesTemplate = `{{define "content"}}
   <td>{{dur $e.P50}}</td>
   <td>{{dur $e.P95}}</td>
   <td class="{{if gt $e.Errors 0}}bad{{end}}">{{$e.Errors}}</td>
+  <td class="{{if eq (verdictState $e $.Judgements) "slow"}}warn{{else if eq (verdictState $e $.Judgements) "ok"}}dim{{end}}">{{verdictLabel $e $.Judgements}}</td>
 </tr>
 {{else}}
 <tr><td colspan="9" class="dim">No HTTP endpoints in this window.</td></tr>
