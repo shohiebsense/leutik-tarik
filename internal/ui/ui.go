@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/model"
@@ -73,8 +72,8 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"Spans":    spans,
 		"Query":    q,
 		"Outcomes": outcomes,
-		"From":     from.Format(inputTimeLayout),
-		"To":       to.Format(inputTimeLayout),
+		"From":     inDisplay(from).Format(inputTimeLayout),
+		"To":       inDisplay(to).Format(inputTimeLayout),
 	})
 }
 
@@ -125,18 +124,7 @@ func describeMatch(m policy.Match) string { return policy.DescribeMatch(m) }
 const inputTimeLayout = "2006-01-02 15:04"
 
 // parseTime accepts the display layout, RFC3339, and a bare date.
-func parseTime(v string) (time.Time, bool) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return time.Time{}, false
-	}
-	for _, layout := range []string{inputTimeLayout, time.RFC3339, "2006-01-02T15:04", "2006-01-02"} {
-		if t, err := time.Parse(layout, v); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
+func parseTime(v string) (time.Time, bool) { return parseTimeInDisplay(v) }
 
 type traceRow struct {
 	Span   model.Span
@@ -266,7 +254,7 @@ var funcs = template.FuncMap{
 		if t.IsZero() {
 			return ""
 		}
-		return t.Format("2006-01-02 15:04:05.000")
+		return inDisplay(t).Format("2006-01-02 15:04:05.000")
 	},
 	// human renders a retention as a person would say it: "14d", not "336h0m0s".
 	"human": func(d time.Duration) string {
@@ -334,6 +322,12 @@ var (
 )
 
 func render(w http.ResponseWriter, t *template.Template, data map[string]any) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	if _, ok := data["Zone"]; !ok {
+		data["Zone"] = displayZoneLabel
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "page", data); err != nil {
 		// The header is already sent; log-worthy, but never a silent 200 with a
@@ -368,11 +362,13 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill{display:block;height:8px;background:#1a7f37}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
+.zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
 </style>
 </head>
 <body>
 <nav><a href="/operations">Operations</a><a href="/services">Services</a><a href="/incidents">Incidents</a><a href="/profiles">Profiles</a><a href="/policies">Policies</a></nav>
 <h1>{{.Title}}</h1>
+<p class="zone" id="zone">All times shown in {{.Zone}}</p>
 {{template "content" .}}
 </body>
 </html>{{end}}`

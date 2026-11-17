@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // distroless has no tzdata; without this Asia/Jakarta silently becomes UTC
 
 	"github.com/shohiebsense/leutik-tarik/internal/logsnap"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
