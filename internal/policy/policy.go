@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,10 @@ type Policy struct {
 	Version  uint32 `yaml:"version"`
 	Defaults Keep   `yaml:"defaults"`
 	Rules    []Rule `yaml:"rules"`
+
+	// Source is the document as written, kept so the UI can show what the
+	// operator actually configured instead of a re-serialised struct.
+	Source string `yaml:"-"`
 }
 
 // Rule keeps matching spans for Keep's durations.
@@ -117,6 +122,7 @@ func Parse(b []byte) (*Policy, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+	p.Source = string(b)
 	return &p, nil
 }
 
@@ -273,4 +279,56 @@ func anyOf(patterns []string, value string, glob bool) bool {
 		}
 	}
 	return false
+}
+
+// DescribeMatch renders a rule's selectors in one human-readable line, so the
+// policies page says what a rule actually selects instead of pointing at the
+// file. Shared by the engine's preview and the UI.
+func DescribeMatch(m Match) string {
+	var parts []string
+	if m.Service != "" {
+		parts = append(parts, "service "+m.Service)
+	}
+	if m.Environment != "" {
+		parts = append(parts, "env "+m.Environment)
+	}
+	if len(m.HTTPMethod) > 0 {
+		parts = append(parts, strings.Join(m.HTTPMethod, "/"))
+	}
+	if len(m.Route) > 0 {
+		parts = append(parts, "route "+strings.Join(m.Route, " | "))
+	}
+	if len(m.OperationType) > 0 {
+		parts = append(parts, "type "+strings.Join(m.OperationType, "/"))
+	}
+	if len(m.Outcome) > 0 {
+		parts = append(parts, strings.Join(m.Outcome, "/"))
+	}
+	if len(m.ErrorType) > 0 {
+		parts = append(parts, "err "+strings.Join(m.ErrorType, "/"))
+	}
+	if min := m.MinDuration.Duration(); min > 0 {
+		parts = append(parts, ">= "+HumanDuration(min))
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// HumanDuration renders a retention the way an operator writes it: "14d", not
+// "336h0m0s".
+func HumanDuration(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "—"
+	case d%(24*time.Hour) == 0:
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d"
+	case d%time.Hour == 0:
+		return strconv.Itoa(int(d/time.Hour)) + "h"
+	case d%time.Minute == 0:
+		return strconv.Itoa(int(d/time.Minute)) + "m"
+	default:
+		return d.String()
+	}
 }

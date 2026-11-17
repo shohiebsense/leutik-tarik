@@ -61,8 +61,10 @@ func (e *Engine) Evaluate(s model.Span) Decision {
 
 // RulePreview is what one rule would do to the sampled traffic.
 type RulePreview struct {
-	Name        string
-	Priority    int
+	Name     string
+	Priority int
+	// Match is the rule's selector rendered for display.
+	Match       string
 	Retention   time.Duration
 	Matches     int
 	BytesPerDay int64
@@ -109,6 +111,7 @@ func (e *Engine) Preview(spans []model.Span, spanWindow time.Duration, measuredB
 		rp := RulePreview{
 			Name:        r.Name,
 			Priority:    r.Priority,
+			Match:       DescribeMatch(r.Match),
 			Retention:   r.Keep.Trace.Duration(),
 			Matches:     matches,
 			BytesPerDay: int64(perDay * float64(measuredBytesPerSpan)),

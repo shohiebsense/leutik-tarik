@@ -89,6 +89,13 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       `docs/integration-fare-membership.md`. Two surprises documented: otelgin
       reports routes as Gin `:param` (so `{id}` policy rules never match), and
       otelpgx sends full SQL, which the platform now drops at ingest.
+- [x] **S17 UI: waterfall, services, incidents, profiles** — SVG waterfall with
+      critical path (geometry verified numerically, ticks rounded), `/services`
+      RED view, `/incidents` error fingerprints, `/profiles` + SVG flamegraph
+      from a real pprof (/v1/profiles upload, blob on disk, metadata in CH).
+      Also fixed on the policies page: durations as 14d not 336h0m0s, real
+      selector text, real YAML source; and the truncated time inputs.
+      Verified in a real browser (Chromium, screenshots).
 - [ ] **S15 method + route from probes** — needs per-Go-version struct offsets
       (the OBI-style work); timebox and keep `completeness=partial` until then.
 

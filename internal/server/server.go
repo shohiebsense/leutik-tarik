@@ -47,6 +47,11 @@ func NewWithOptions(o Options) http.Handler {
 	}
 	u := ui.UI{Store: s, Policies: policies}
 	mux.HandleFunc("/policies", u.PoliciesPage)
+	mux.HandleFunc("/services", u.Services)
+	mux.HandleFunc("/incidents", u.Incidents)
+	mux.HandleFunc("/profiles", u.Profiles)
+	mux.HandleFunc("/profiles/{profileID}", u.ProfileDetail)
+	mux.Handle("/v1/profiles", ingest.ProfilesHandler{Store: s, MaxBodyBytes: 64 << 20})
 	mux.HandleFunc("/operations", u.Operations)
 	mux.HandleFunc("/traces/{traceID}", u.Trace)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

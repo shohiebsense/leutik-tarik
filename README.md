@@ -22,6 +22,33 @@ lines that carried the trace id separately from lines that were merely
 time-correlated. See `docs/log-snapshots.md`. Disable with
 `LEUTIK_LOG_CAPTURE=off`.
 
+## What you can see
+
+| Page | Answers |
+|---|---|
+| `/operations` | what ran, how long, did it fail |
+| `/traces/{id}` | **the story of one request** — SVG waterfall with the critical path outlined, span table, log snippets split into direct evidence vs time-correlated |
+| `/services` | which service is broken — operations, errors, error rate, p50/p95, routes |
+| `/incidents` | how often — failures grouped into fingerprints with trace counts |
+| `/profiles` | stored pprof profiles, rendered as an SVG flamegraph |
+| `/policies` | effective retention config, 24h preview, dead rules flagged |
+
+Everything is server-rendered: the waterfall and flamegraph are plain SVG, so the
+browser runs no JavaScript.
+
+## Profiling
+
+```sh
+# from any Go service with net/http/pprof enabled
+curl -s "http://SERVICE/debug/pprof/profile?seconds=30" -o cpu.pb.gz
+curl -s -X POST --data-binary @cpu.pb.gz \
+  "http://<platform>:8080/v1/profiles?service=fare-membership&type=cpu"
+```
+
+The blob is stored on disk, its metadata in ClickHouse, and `/profiles/{id}`
+renders it. Profiles are a **time window**, not a single request — the page says
+so, because claiming per-request attribution from a 30s profile would be a lie.
+
 ## Retention policy
 
 ```sh
