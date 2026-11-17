@@ -1,0 +1,74 @@
+name: deploy
+
+# Deploys on every push to main. No registry is involved: CI builds the binary,
+# copies it to the node, and the node imports the image into containerd itself.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "migrations/**"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .); if [ -n "$out" ]; then echo "not gofmt'd:"; echo "$out"; exit 1; fi
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # Static binary: the node has Go 1.22, the module needs 1.26, so the build
+      # has to happen here rather than on the server.
+      - name: build linux binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o leutik-tarik ./cmd/leutik-tarik
+
+      - name: install deploy key
+        env:
+          KEY: ${{ secrets.JUPLER_SSH_KEY }}
+          HOST: ${{ vars.JUPLER_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: ship binary and roll out
+        env:
+          HOST: ${{ vars.JUPLER_HOST }}
+          USER: ${{ vars.JUPLER_USER }}
+        run: |
+          set -euo pipefail
+          SCP="scp -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
+          SSH="ssh -i $HOME/.ssh/deploy -o StrictHostKeyChecking=yes"
+          $SCP leutik-tarik              "$USER@$HOST:/opt/leutik-tarik/leutik-tarik"
+          $SCP deploy/Dockerfile         "$USER@$HOST:/opt/leutik-tarik/Dockerfile"
+          $SCP deploy/deploy-on-node.sh  "$USER@$HOST:/opt/leutik-tarik/deploy-on-node.sh"
+          $SSH "$USER@$HOST" "IMAGE_TAG=sha-${GITHUB_SHA::7} bash /opt/leutik-tarik/deploy-on-node.sh"
