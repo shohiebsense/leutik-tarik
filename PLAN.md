@@ -44,7 +44,10 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       ClickHouse 26.10.5.
 - [x] **S6 lock the review's numbers as assertions** — 249/249 vs projection
       lookup, duplicate-insert behaviour, conditional TTL acceptance.
-- [ ] **S7 agent (Phase 1c)** — on Jupler / a Linux VM. Blocked: no eBPF on macOS.
+- [ ] **S7 agent (Phase 1c)** — **unblocked**: Docker Desktop's LinuxKit kernel
+      (6.10.14) has BTF and a privileged container can attach uprobes (measured).
+      Develop inside `--privileged` containers here; Jupler only for the final
+      on-host check. See `docs/agent-portability.md`.
 
 ## Found while implementing (must not be forgotten)
 
