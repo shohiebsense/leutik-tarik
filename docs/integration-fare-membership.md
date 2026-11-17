@@ -13,17 +13,24 @@ dependency exists yet.**
 
 ## 1. Dependencies (versions verified to resolve)
 
-| Module | Version resolved |
-|---|---|
-| `go.opentelemetry.io/otel` | v1.47.0 |
-| `go.opentelemetry.io/otel/sdk` | v1.47.0 |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` | v1.47.0 |
-| `go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin` | v0.72.0 |
-| `github.com/exaring/otelpgx` | v0.13.0 |
-| `github.com/redis/go-redis/extra/redisotel/v9` | v9.23.0 |
+Pinned so the repo keeps `go 1.25` — the latest releases do **not**:
 
-Note the two version lines: core OTel is v1.x, the Gin *contrib* is v0.x. Do not
-try to make them match.
+| Module | Pin | Why this version |
+|---|---|---|
+| `go.opentelemetry.io/otel` (+ `sdk`, `otlptracehttp`) | **v1.44.0** | v1.47.0 requires Go **1.26**, which would break the repo's `go 1.25` pin and the Go 1.22 CI bootstrap |
+| `go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin` | **v0.60.0** | v0.65 wants gin 1.11, v0.72 wants gin 1.12; v0.60 keeps **gin 1.10.0** |
+| `github.com/exaring/otelpgx` | v0.13.0 | requires only Go 1.25 |
+| `github.com/redis/go-redis/extra/redisotel/v9` | **v9.7.0** | matches the repo's `go-redis` v9.7.0; v9.23 requires otel v1.47 (→ Go 1.26) |
+
+**Three separate version traps, each of which silently upgrades something:**
+
+1. `otel` ≥ v1.45 raises the `go` directive to 1.26.
+2. `otelgin` is versioned independently (v0.x) and drags Gin forward — v0.72
+   upgraded Gin from 1.10.0 to 1.12.0 without being asked.
+3. `redisotel` is versioned with `go-redis`, so pin it to the same v9.x as the
+   repo rather than "latest".
+
+`go get` applies all three silently. Check `go.mod` after any `go get` here.
 
 ## 2. Tracer provider (`cmd/server/main.go`, before `setupRouter`)
 
