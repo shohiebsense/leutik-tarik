@@ -245,7 +245,7 @@ const operationsTemplate = `{{define "content"}}
   <td>{{ts .StartTime}}</td>
   <td>{{.ServiceName}}</td>
   <td>{{.HTTPMethod}}</td>
-  <td>{{.HTTPRoute}}</td>
+  <td>{{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}</td>
   <td>{{if .StatusCode}}{{.StatusCode}}{{else}}—{{end}}</td>
   <td>{{dur .Duration}}</td>
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{end}}">{{.Outcome}}</td>

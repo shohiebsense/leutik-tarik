@@ -38,4 +38,13 @@ migrate:
 	LEUTIK_CLICKHOUSE_URL=$${LEUTIK_CLICKHOUSE_URL:?set LEUTIK_CLICKHOUSE_URL} \
 		$(GO) run ./cmd/leutik-tarik -migrate
 
+# Rebuild the eBPF object. Runs in a container because Apple's clang cannot
+# target bpf at all (docs/agent-portability.md §5b). The .o is committed, so
+# normal builds and CI need no clang.
+agent-bpf:
+	docker run --rm -v "$(CURDIR)":/w -w /w alpine:3.20 sh -c \
+		'apk add --no-cache clang llvm >/dev/null && \
+		 clang -O2 -g -target bpf -mcpu=v3 -c internal/agent/bpf/src/probe.bpf.c \
+		       -o internal/agent/bpf/probe.bpf.o'
+
 check: fmt-check vet build test

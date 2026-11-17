@@ -81,16 +81,35 @@ func normalize(raw []rawSpan, ingestedAt time.Time) ([]model.Record, normStats) 
 		}
 
 		out = append(out, model.Record{
-			Span:     span,
-			Decision: model.Decision{PolicyID: defaultPolicy, PolicyVersion: 1, Sampled: true, Redactions: redacted, Retention: retentionFor(span)},
-			Source:   "otlp-sdk",
-			// An OTLP SDK supplies its own spans, so parentage is real rather
-			// than correlated — except for async links, which stay links.
-			Completeness: model.CompletenessComplete,
+			Span:         span,
+			Decision:     model.Decision{PolicyID: defaultPolicy, PolicyVersion: 1, Sampled: true, Redactions: redacted, Retention: retentionFor(span)},
+			Source:       provenance(r.attrs, "leutik.capture.source", "otlp-sdk"),
+			Completeness: completeness(r.attrs),
 			IngestedAt:   ingestedAt,
 		})
 	}
 	return out, stats
+}
+
+// completeness reports how much the capture actually proves. A sender may
+// declare it; otherwise an OTLP SDK's own spans are complete (it knows its own
+// parentage). Never upgraded by guesswork — a probe that saw one function call
+// did not see the request (build prompt §5.2).
+func completeness(attrs map[string]string) string {
+	switch v := attrs["leutik.capture.completeness"]; v {
+	case model.CompletenessPartial, model.CompletenessCorrelated, model.CompletenessUnsupported:
+		return v
+	default:
+		return model.CompletenessComplete
+	}
+}
+
+// provenance reads a declared source, falling back to the default.
+func provenance(attrs map[string]string, key, def string) string {
+	if v := attrs[key]; v != "" {
+		return v
+	}
+	return def
 }
 
 func firstOf(attrs map[string]string, keys ...string) string {

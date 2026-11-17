@@ -52,10 +52,18 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       (re-runs are no-ops, an edited applied migration is refused), `-migrate`
       flag, `make migrate`. Removing the superseded 001 also fixed the bug where
       `CREATE IF NOT EXISTS` left the table at 16 columns instead of 42.
-- [ ] **S7 agent (Phase 1c)** — **unblocked**: Docker Desktop's LinuxKit kernel
-      (6.10.14) has BTF and a privileged container can attach uprobes (measured).
-      Develop inside `--privileged` containers here; Jupler only for the final
-      on-host check. See `docs/agent-portability.md`.
+- [x] **S10 agent probe pipeline (1c-2)** — self-contained BPF program
+      (`internal/agent/bpf/src/probe.bpf.c`, no libbpf headers), compiled in a
+      container via `make agent-bpf`, object committed, loaded with cilium/ebpf,
+      attached as a uprobe, events streamed through a bounded ring-buffer reader
+      and emitted as OTLP. Proven end-to-end into ClickHouse (63 events).
+      Constraint found: a uprobe cannot target a binary on a virtiofs/NFS mount
+      (EIO); it needs local disk or hostPath.
+- [ ] **S7 agent (Phase 1c) net/http spans** — the hard slice. Attach works;
+      the unsolved part is reading `net/http` arguments under Go's register ABI
+      (per-Go-version knowledge, the reason OBI is its own project). Timebox it:
+      prove one Go version first, then decide on a compatibility matrix.
+      See `docs/agent-portability.md`.
 
 ## Found while implementing (must not be forgotten)
 

@@ -19,7 +19,23 @@ func main() {
 	asJSON := flag.Bool("json", false, "machine-readable output")
 	doctorOnly := flag.Bool("doctor", false, "only check instrumentation prerequisites")
 	discoverOnly := flag.Bool("discover", false, "only list discovered services")
+
+	probeBinary := flag.String("probe-binary", "", "attach a uprobe to this executable and stream events")
+	probeSymbol := flag.String("probe-symbol", "main.fire", "symbol name to probe")
+	emitURL := flag.String("emit", envOr("LEUTIK_ADDR", "http://127.0.0.1:8080"), "ingest base URL for probe events")
+	probeService := flag.String("service", "leutik-probe", "service.name reported for probe events")
 	flag.Parse()
+
+	if *probeBinary != "" {
+		if err := runProbe(probeConfig{
+			Binary: *probeBinary, Symbol: *probeSymbol,
+			EmitURL: *emitURL, Service: *probeService,
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Default: both, because the useful question is "what is here, and can we
 	// observe it".
@@ -98,6 +114,22 @@ func main() {
 		}
 		_ = w.Flush()
 	}
+}
+
+// probeConfig is what a probe run needs; defined here so both platform
+// implementations share the shape.
+type probeConfig struct {
+	Binary  string
+	Symbol  string
+	EmitURL string
+	Service string
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func truncate(s string, n int) string {

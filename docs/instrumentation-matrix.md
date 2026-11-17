@@ -11,7 +11,9 @@ Capability states: **complete** / **partial** / **correlated** / **unsupported**
 | pgx driver | C | planned | same as above, driver-specific probe |
 | Redis/cache client | B | planned | command family, duration, error |
 | Asynq / queue workers | B + span links | planned | producer/consumer via trace context where safe |
-| OTLP SDK apps | D (ingest) | **working** | accepts OTLP/HTTP JSON traces today |
+| OTLP SDK apps | D (ingest) | **working** | accepts OTLP/HTTP protobuf+JSON, plain or gzip |
+| eBPF uprobe (function entry) | C | **partial** | attach + event delivery proven; no argument/route reading yet |
+| Go `net/http` via uprobe | C | planned | needs register-ABI argument reading (per Go version) |
 | Python / other runtimes | — | unsupported | not in initial scope; matrix grows per phase |
 
 ## Current proof (slice 1)

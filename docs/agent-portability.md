@@ -138,6 +138,36 @@ Consequences for the repository:
   installed on this host either, which is another reason to keep the whole
   compile step inside the container.
 
+## 5c. Where the probed binary lives matters (measured)
+
+A uprobe failed with `perf_event_open: input/output error` on a binary that was
+bind-mounted from macOS, and succeeded on the identical binary copied into the
+container:
+
+| Target location | Result |
+|---|---|
+| macOS bind mount (virtiofs), `/t/fire` | **EIO — attach refused** |
+| container-local disk, `/fire` (same file, `cp`) | **attached, events flowed** |
+
+So a uprobe needs the executable on a filesystem the kernel can mmap normally.
+Practical rules: keep target binaries on `hostPath`/local disk, never probe from
+NFS, ConfigMap/Secret mounts, or (on Docker Desktop) a macOS bind mount. The
+agent will report this as an attach failure, not as "no traffic".
+
+## 5d. The pipeline is proven (measured)
+
+kernel object → load → uprobe on a Go binary → ring buffer → Go → OTLP → ClickHouse → UI:
+
+```
+attached uprobe main.fire in /fire, emitting to http://127.0.0.1:8080
+stopping: 63 emitted, 0 failed
+operations page: 63 x "uprobe main.fire"  (service probe-target)
+clickhouse:      probe-target  uprobe main.fire  agent  correlated  63
+```
+
+Probe spans are stored as `source=agent`, `completeness=correlated` — one
+function call is not evidence of a whole request, and the record says so.
+
 ## 6. Decision
 
 1. **Ship the agent as a container image** (multi-arch, static Go binary, BPF

@@ -133,3 +133,34 @@ func TestOutcome(t *testing.T) {
 		}
 	}
 }
+
+// A probe that saw one function call must never be reported as a complete
+// capture of a request (build prompt §5.2).
+func TestCompletenessAndSourceComeFromTheSender(t *testing.T) {
+	raw := []rawSpan{{
+		resource: map[string]string{"service.name": "probe-target"},
+		attrs: map[string]string{
+			"leutik.capture.source":       "agent",
+			"leutik.capture.completeness": "correlated",
+		},
+		traceID: "aa", spanID: "bb", name: "uprobe main.fire",
+	}}
+	records, _ := normalize(raw, time.Now())
+	if len(records) != 1 {
+		t.Fatalf("want 1 record, got %d", len(records))
+	}
+	if records[0].Source != "agent" {
+		t.Errorf("source = %q, want agent", records[0].Source)
+	}
+	if records[0].Completeness != "correlated" {
+		t.Errorf("completeness = %q, want correlated", records[0].Completeness)
+	}
+}
+
+func TestCompleteIsTheDefaultForSDKSpans(t *testing.T) {
+	raw := []rawSpan{{resource: map[string]string{}, attrs: map[string]string{}, traceID: "aa", spanID: "bb"}}
+	records, _ := normalize(raw, time.Now())
+	if records[0].Completeness != "complete" || records[0].Source != "otlp-sdk" {
+		t.Errorf("defaults = %q/%q", records[0].Source, records[0].Completeness)
+	}
+}
