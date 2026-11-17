@@ -23,6 +23,9 @@ import (
 type ClickHouse struct {
 	base   string
 	client *http.Client
+	// migrateTable is the bookkeeping table for migrations; empty means the
+	// default. Overridable so integration tests do not share real history.
+	migrateTable string
 }
 
 // NewClickHouse returns a store writing to the ClickHouse HTTP endpoint, e.g.

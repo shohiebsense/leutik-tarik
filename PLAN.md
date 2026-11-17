@@ -44,6 +44,14 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       ClickHouse 26.10.5.
 - [x] **S6 lock the review's numbers as assertions** — 249/249 vs projection
       lookup, duplicate-insert behaviour, conditional TTL acceptance.
+- [x] **S8 agent discovery + doctor (1c-1)** — `cmd/leutik-agent`: reads procfs
+      for listening services (port/PID/container attribution), and diagnoses
+      kernel/BTF/sysctls/capabilities. Verified on a real kernel inside a
+      privileged container (found nginx + dockerd, correct container id).
+- [x] **S9 migrations with an ALTER path** — `schema_migrations` + checksum
+      (re-runs are no-ops, an edited applied migration is refused), `-migrate`
+      flag, `make migrate`. Removing the superseded 001 also fixed the bug where
+      `CREATE IF NOT EXISTS` left the table at 16 columns instead of 42.
 - [ ] **S7 agent (Phase 1c)** — **unblocked**: Docker Desktop's LinuxKit kernel
       (6.10.14) has BTF and a privileged container can attach uprobes (measured).
       Develop inside `--privileged` containers here; Jupler only for the final
@@ -51,11 +59,14 @@ Ordered so the schema is written once. Each step leaves build + tests green.
 
 ## Found while implementing (must not be forgotten)
 
-- **Migrations have no ALTER path.** `002_spans.sql` is
-  `CREATE TABLE IF NOT EXISTS`, so an existing table silently keeps the old
-  columns (hit for real: `redactions` was missing and every query 404'd). A
-  schema-evolution mechanism (`schema_migrations` + ordered ALTERs) is required
-  before the second schema change ships. Dev workaround: drop the table.
+- **Migrations** now have an ALTER path (S9). The trap that caused it is worth
+  remembering: `CREATE TABLE IF NOT EXISTS` keeps an existing table's OLD
+  columns, so a changed CREATE silently does nothing. Add a NEW numbered
+  migration with `ALTER TABLE ... ADD COLUMN`; never edit an applied one (the
+  runner refuses it by checksum).
+- **Superseded migrations must be deleted, not annotated.** `001_spans.sql` had
+  a "do not apply" header and the runner applied it anyway, recreating the old
+  schema. The runner cannot read intent; the file has to go.
 - **TTL only fires on merge**, so expired-but-unmerged rows stay readable.
   Queries must filter `start_time`; never treat TTL as correctness (ADR 0006).
 - **Dedup requires identical timestamps.** ReplacingMergeTree dedupes on the

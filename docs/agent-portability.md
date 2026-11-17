@@ -123,6 +123,21 @@ So the honest framing: **Kubernetes can *grant* the prerequisites; it cannot
 *provide* them.** The nodes still need a capable kernel — which every mainstream
 image since Ubuntu 20.10 / Debian 11 / RHEL 9 already has.
 
+## 5b. Build-time constraint (measured)
+
+Apple's clang **cannot compile BPF**: `clang -print-targets | grep -c bpf` → `0`
+on macOS (Apple clang 17). Linux clang in a container reports **3** bpf targets.
+
+Consequences for the repository:
+
+- BPF objects must be compiled in a Linux container (or Linux host), never with
+  the macOS toolchain. `make agent-bpf` must shell out to a container.
+- Generated objects are committed, so a normal build and the CI unit tests do
+  not need clang at all. Only regenerating them does.
+- `bpf2go` (cilium/ebpf) is the generator; `bpftool`/`llvm-strip` are not
+  installed on this host either, which is another reason to keep the whole
+  compile step inside the container.
+
 ## 6. Decision
 
 1. **Ship the agent as a container image** (multi-arch, static Go binary, BPF

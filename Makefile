@@ -32,11 +32,10 @@ db-down:
 db-shell:
 	docker compose exec clickhouse clickhouse-client
 
-# Apply migrations to the dev database (idempotent DDL).
+# Apply pending migrations. Versioned via schema_migrations, so this is safe to
+# re-run and detects a migration edited after being applied.
 migrate:
-	@for f in migrations/*.sql; do \
-		echo "applying $$f"; \
-		curl -sS --fail --data-binary @$$f "$${LEUTIK_CLICKHOUSE_URL%/}/"; \
-	done
+	LEUTIK_CLICKHOUSE_URL=$${LEUTIK_CLICKHOUSE_URL:?set LEUTIK_CLICKHOUSE_URL} \
+		$(GO) run ./cmd/leutik-tarik -migrate
 
 check: fmt-check vet build test

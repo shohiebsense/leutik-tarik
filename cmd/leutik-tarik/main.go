@@ -20,7 +20,13 @@ func main() {
 	// Loopback by default: this is an internal telemetry store with no auth yet,
 	// so it must not be reachable from the LAN by accident (review P6).
 	addr := flag.String("addr", envOr("LEUTIK_ADDR", "127.0.0.1:8080"), "listen address")
+	migrate := flag.Bool("migrate", false, "apply pending schema migrations and exit")
 	flag.Parse()
+
+	if *migrate {
+		runMigrations()
+		return
+	}
 
 	st, label := pickStore()
 
@@ -74,6 +80,25 @@ func pickStore() (store.Store, string) {
 		log.Fatalf("clickhouse at %s unreachable: %v", url, err)
 	}
 	return ch, "clickhouse " + url
+}
+
+// runMigrations applies pending DDL. Separate from startup on purpose: a
+// service that migrates itself on boot makes a bad deploy unrecoverable.
+func runMigrations() {
+	url := os.Getenv("LEUTIK_CLICKHOUSE_URL")
+	if url == "" {
+		log.Fatal("-migrate needs LEUTIK_CLICKHOUSE_URL")
+	}
+	ch, err := store.NewClickHouse(url)
+	if err != nil {
+		log.Fatalf("clickhouse: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := ch.Migrate(ctx); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	log.Println("migrations up to date")
 }
 
 func envOr(key, def string) string {
