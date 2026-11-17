@@ -19,6 +19,12 @@ type Store interface {
 	ListOperations(ctx context.Context, q Query) ([]model.Span, error)
 	// GetTrace returns every span of one trace ordered by start time.
 	GetTrace(ctx context.Context, traceID string) ([]model.Span, error)
+
+	// InsertLogs stores a captured log snapshot. Called only when a trigger
+	// fires — never for a routine log line.
+	InsertLogs(ctx context.Context, events []model.LogEvent) error
+	// GetLogs returns the snapshot captured for one trace, oldest first.
+	GetLogs(ctx context.Context, traceID string) ([]model.LogEvent, error)
 }
 
 // Query is the searchable operation identity. Time is always expressible: it is
@@ -52,6 +58,7 @@ func (q Query) limit() int {
 type Memory struct {
 	mu      sync.RWMutex
 	records []model.Record
+	logs    []model.LogEvent
 }
 
 // NewMemory returns an empty in-memory store.
@@ -101,6 +108,26 @@ func (m *Memory) ListOperations(_ context.Context, q Query) ([]model.Span, error
 	if n := q.limit(); len(out) > n {
 		out = out[:n]
 	}
+	return out, nil
+}
+
+func (m *Memory) InsertLogs(_ context.Context, events []model.LogEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs = append(m.logs, events...)
+	return nil
+}
+
+func (m *Memory) GetLogs(_ context.Context, traceID string) ([]model.LogEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []model.LogEvent
+	for _, e := range m.logs {
+		if e.TraceID == traceID {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
 	return out, nil
 }
 

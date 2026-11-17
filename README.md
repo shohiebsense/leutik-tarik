@@ -14,6 +14,14 @@ ingest, the ClickHouse store, and the instrumentation agent are still missing.
 See `PLAN.md` for the corrected status and `docs/review-2026-11-17.md` for the
 full findings list.
 
+## Log snapshots
+
+Logs are not stored as a stream. `/v1/logs` fills a bounded in-memory ring; a
+snapshot is written only when a span errors or exceeds 2s. The trace page shows
+lines that carried the trace id separately from lines that were merely
+time-correlated. See `docs/log-snapshots.md`. Disable with
+`LEUTIK_LOG_CAPTURE=off`.
+
 ## Retention policy
 
 ```sh

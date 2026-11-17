@@ -473,3 +473,117 @@ func toRow(r model.Record) insertRow {
 		Attributes:           attrs,
 	}
 }
+
+// InsertLogs writes a captured snapshot.
+func (c *ClickHouse) InsertLogs(ctx context.Context, events []model.LogEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	var body bytes.Buffer
+	enc := json.NewEncoder(&body)
+	now := chTime(time.Now().UTC())
+	for _, e := range events {
+		retention := uint32(e.Retention / time.Second)
+		if retention == 0 {
+			retention = 7 * 24 * 3600
+		}
+		exact := uint8(0)
+		if e.Exact {
+			exact = 1
+		}
+		row := map[string]any{
+			"trace_id":          e.TraceID,
+			"span_id":           e.SpanID,
+			"service_name":      e.Service,
+			"severity":          e.Severity,
+			"body":              e.Body,
+			"ts":                chTime(e.Time.UTC()),
+			"source":            e.Source,
+			"exact":             exact,
+			"ingested_at":       now,
+			"retention_seconds": retention,
+		}
+		if err := enc.Encode(row); err != nil {
+			return fmt.Errorf("encode log row: %w", err)
+		}
+	}
+	return c.insertRows(ctx, "log_snapshots", body.Bytes())
+}
+
+// GetLogs returns the snapshot for one trace.
+func (c *ClickHouse) GetLogs(ctx context.Context, traceID string) ([]model.LogEvent, error) {
+	sql := `SELECT trace_id, span_id, service_name, severity, body, ts, source, exact
+		FROM log_snapshots FINAL WHERE trace_id = ? ORDER BY ts LIMIT 1000`
+	body, err := c.rawQueryParams(ctx, sql, []any{traceID})
+	if err != nil {
+		return nil, err
+	}
+	var out []model.LogEvent
+	for _, line := range bytes.Split(bytes.TrimSpace(body), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var row struct {
+			TraceID  string `json:"trace_id"`
+			SpanID   string `json:"span_id"`
+			Service  string `json:"service_name"`
+			Severity string `json:"severity"`
+			Body     string `json:"body"`
+			TS       string `json:"ts"`
+			Source   string `json:"source"`
+			Exact    uint8  `json:"exact"`
+		}
+		if err := json.Unmarshal(line, &row); err != nil {
+			return nil, fmt.Errorf("decode log row: %w", err)
+		}
+		out = append(out, model.LogEvent{
+			TraceID: row.TraceID, SpanID: row.SpanID, Service: row.Service,
+			Severity: row.Severity, Body: row.Body, Time: parseCHTime(row.TS),
+			Source: row.Source, Exact: row.Exact == 1,
+		})
+	}
+	return out, nil
+}
+
+// insertRows posts JSONEachRow into a table with a payload-derived dedup token.
+func (c *ClickHouse) insertRows(ctx context.Context, table string, body []byte) error {
+	sum := sha256.Sum256(body)
+	token := hex.EncodeToString(sum[:16])
+	u := fmt.Sprintf("%s/?query=%s&insert_deduplication_token=%s", c.base,
+		url.QueryEscape("INSERT INTO "+table+" FORMAT JSONEachRow"), url.QueryEscape(token))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("insert %s: http %d: %s", table, resp.StatusCode, readLimited(resp.Body))
+	}
+	return nil
+}
+
+// rawQueryParams runs a parameterised SELECT returning JSONEachRow.
+func (c *ClickHouse) rawQueryParams(ctx context.Context, sql string, args []any) ([]byte, error) {
+	params := url.Values{}
+	params.Set("query", bindNamed(sql+" FORMAT JSONEachRow", len(args)))
+	for i, a := range args {
+		params.Set("param_"+paramName(i+1), fmt.Sprint(a))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/?"+params.Encode(), strings.NewReader(""))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("query: http %d: %s", resp.StatusCode, readLimited(resp.Body))
+	}
+	return readAllLimited(resp.Body)
+}

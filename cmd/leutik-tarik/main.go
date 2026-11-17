@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/logsnap"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/server"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
@@ -32,9 +33,17 @@ func main() {
 	st, label := pickStore()
 	policies := pickPolicy()
 
+	opts := server.Options{Store: st, Policies: policies}
+	if os.Getenv("LEUTIK_LOG_CAPTURE") != "off" {
+		opts.Logs = logsnap.NewRing(logsnap.Limits{})
+		opts.Trigger = logsnap.DefaultTrigger()
+		opts.LogRetention = 7 * 24 * time.Hour
+		log.Printf("log capture on: bounded ring per service, snapshot on error or >%s", opts.Trigger.SlowThreshold)
+	}
+
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: server.New(st, policies),
+		Handler: server.NewWithOptions(opts),
 		// Bounded, so a slow client cannot hold a connection open indefinitely.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,

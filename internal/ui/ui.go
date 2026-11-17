@@ -127,6 +127,12 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logs, err := u.Store.GetLogs(r.Context(), traceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	summary := model.Summarize(spans)
 	start := spans[0].StartTime
 	for _, s := range spans {
@@ -142,11 +148,21 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			Depth:  depthOf(spans, s),
 		}
 	}
+	var exact, correlated []model.LogEvent
+	for _, l := range logs {
+		if l.Exact {
+			exact = append(exact, l)
+		} else {
+			correlated = append(correlated, l)
+		}
+	}
 	render(w, traceView, map[string]any{
-		"Title":   "Trace " + traceID,
-		"TraceID": traceID,
-		"Rows":    rows,
-		"Summary": summary,
+		"Title":      "Trace " + traceID,
+		"TraceID":    traceID,
+		"Rows":       rows,
+		"Summary":    summary,
+		"ExactLogs":  exact,
+		"Correlated": correlated,
 	})
 }
 
@@ -358,6 +374,47 @@ const traceTemplate = `{{define "content"}}
 {{end}}
 </tbody>
 </table>
+
+{{if or .ExactLogs .Correlated}}
+<h2>Log snippets</h2>
+<p class="dim">Captured because this operation triggered a snapshot. Not a log stream: a bounded window around the event.</p>
+
+{{if .ExactLogs}}
+<h3>Direct evidence <span class="dim">({{len .ExactLogs}} lines carrying this trace id)</span></h3>
+<table>
+<thead><tr><th>Time</th><th>Service</th><th>Severity</th><th>Message</th></tr></thead>
+<tbody>
+{{range .ExactLogs}}
+<tr>
+  <td>{{ts .Time}}</td>
+  <td>{{.Service}}</td>
+  <td class="{{if or (eq .Severity "error") (eq .Severity "fatal")}}bad{{else if eq .Severity "warn"}}warn{{end}}">{{.Severity}}</td>
+  <td>{{.Body}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{end}}
+
+{{if .Correlated}}
+<h3>Time-correlated candidates <span class="dim">({{len .Correlated}} lines without a trace id — same service, same window)</span></h3>
+<table>
+<thead><tr><th>Time</th><th>Service</th><th>Severity</th><th>Message</th></tr></thead>
+<tbody>
+{{range .Correlated}}
+<tr>
+  <td>{{ts .Time}}</td>
+  <td>{{.Service}}</td>
+  <td class="{{if or (eq .Severity "error") (eq .Severity "fatal")}}bad{{else if eq .Severity "warn"}}warn{{end}}">{{.Severity}}</td>
+  <td>{{.Body}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{end}}
+{{else}}
+<p class="dim">No log snapshot for this operation. Nothing is captured unless a trigger fires.</p>
+{{end}}
 
 <details>
 <summary>Accessible table / raw fields</summary>

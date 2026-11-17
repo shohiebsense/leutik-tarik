@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/logsnap"
+	"github.com/shohiebsense/leutik-tarik/internal/model"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
@@ -26,6 +29,14 @@ type Handler struct {
 	// Policies decides retention per span. Nil means the conservative default
 	// (14 days, no rules), so an unconfigured install still behaves predictably.
 	Policies *policy.Engine
+
+	// Logs is the bounded buffer a snapshot is taken from. Nil disables log
+	// capture entirely (the default, because it is opt-in).
+	Logs *logsnap.Ring
+	// Trigger decides which spans are worth a snapshot.
+	Trigger logsnap.Trigger
+	// LogRetention is how long a captured log row lives.
+	LogRetention time.Duration
 
 	// MaxBodyBytes caps the *decompressed* request body. Zero uses
 	// DefaultMaxBodyBytes. Bounded on purpose: the build prompt lists
@@ -64,7 +75,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	kind := wireKind(r.Header.Get("Content-Type"))
 	raw, err := decode(kind, body)
 	if err != nil {
-		http.Error(w, "invalid otlp payload: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid otlp payload: "+err.Error()+contentTypeHint(kind, body), http.StatusBadRequest)
 		return
 	}
 
@@ -76,10 +87,69 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.snapshotLogs(r, records)
+
 	h.logf("otlp ingest format=%s encoding=%s decompressed_bytes=%d spans=%d dropped_attrs=%d redacted=%d",
 		kind, encodingOrDefault(encoding), len(body), len(records), stats.droppedAttrs, stats.redacted)
 
 	writeSuccess(w, kind)
+}
+
+// snapshotLogs turns a triggered span into a bounded log snapshot. This is the
+// only path that writes log rows: no trigger, no storage (build prompt §8.2).
+func (h Handler) snapshotLogs(r *http.Request, records []model.Record) {
+	if h.Logs == nil || len(records) == 0 {
+		return
+	}
+	trigger := h.Trigger
+	if trigger.MaxEvents == 0 {
+		trigger = logsnap.DefaultTrigger()
+	}
+	retention := h.LogRetention
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+
+	var captured []model.LogEvent
+	for _, rec := range records {
+		fires, reason := trigger.Fires(rec.Span)
+		if !fires {
+			continue
+		}
+		from, to := trigger.Window(rec.Span)
+		events := h.Logs.Snapshot(rec.Span.ServiceName, rec.Span.TraceID, from, to, trigger.MaxEvents)
+		for _, e := range events {
+			e.Retention = retention
+			e.Source = "ring:" + reason
+			// A line with no trace id still belongs to this snapshot, so it is
+			// stored under the triggering trace and keeps exact=false. Without
+			// this the row would be unreachable by trace id and the UI would
+			// silently drop it.
+			if e.TraceID == "" {
+				e.TraceID = rec.Span.TraceID
+			}
+			captured = append(captured, e)
+		}
+	}
+	if len(captured) == 0 {
+		return
+	}
+	if err := h.Store.InsertLogs(r.Context(), captured); err != nil {
+		// Telemetry loss is reported, never silent, and never fatal to ingest.
+		h.logf("log snapshot failed: %v", err)
+		return
+	}
+	h.logf("log snapshot captured=%d", len(captured))
+}
+
+// contentTypeHint turns the most common (and most confusing) mistake into a
+// sentence: OTLP's default encoding is protobuf, so JSON sent without a
+// Content-Type header is parsed as protobuf and fails obscurely.
+func contentTypeHint(kind wire, body []byte) string {
+	if kind == wireProtobuf && len(bytes.TrimSpace(body)) > 0 && bytes.TrimSpace(body)[0] == '{' {
+		return " (the body looks like JSON; set Content-Type: application/json, because OTLP defaults to protobuf)"
+	}
+	return ""
 }
 
 var errTooLarge = errors.New("request body exceeds limit")
@@ -148,6 +218,9 @@ func encodingOrDefault(e string) string {
 	}
 	return e
 }
+
+// logfDefault is the package-level fallback used by both handlers.
+func logfDefault(format string, args ...any) { log.Printf(format, args...) }
 
 func (h Handler) logf(format string, args ...any) {
 	if h.Logf == nil {

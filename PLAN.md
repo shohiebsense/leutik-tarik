@@ -65,6 +65,13 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       `/policies` page showing the effective config + a 24h preview with dead
       rules flagged. Proven: one policy produced 90d / 30d / 2d on three spans.
       Deliberately NOT done: sampling, per-signal retention (`docs/policies.md`).
+- [x] **S12 log snapshots (Phase 3)** — `/v1/logs` (protobuf/JSON, gzip, body
+      cap), bounded ring per service (events/bytes/age, oversized-line guard),
+      trigger on error or >2s, snapshot window, per-row retention, and a trace
+      page that separates direct evidence from time-correlated candidates.
+      Two bugs found and locked by tests: rows collapsing on identical
+      timestamps, and correlated lines being unreachable by trace id.
+      See `docs/log-snapshots.md`.
 - [ ] **S7 agent (Phase 1c) net/http spans** — the hard slice. Attach works;
       the unsolved part is reading `net/http` arguments under Go's register ABI
       (per-Go-version knowledge, the reason OBI is its own project). Timebox it:
