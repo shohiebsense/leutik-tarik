@@ -5,15 +5,20 @@ import (
 	"net/http"
 
 	"github.com/shohiebsense/leutik-tarik/internal/ingest"
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 	"github.com/shohiebsense/leutik-tarik/internal/ui"
 )
 
-// New returns the HTTP handler wiring ingest, store, and UI.
-func New(s store.Store) http.Handler {
+// New returns the HTTP handler wiring ingest, store, policy and UI.
+func New(s store.Store, policies *policy.Engine) http.Handler {
+	if policies == nil {
+		policies = policy.Default()
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/v1/traces", ingest.Handler{Store: s})
-	u := ui.UI{Store: s}
+	mux.Handle("/v1/traces", ingest.Handler{Store: s, Policies: policies})
+	u := ui.UI{Store: s, Policies: policies}
+	mux.HandleFunc("/policies", u.PoliciesPage)
 	mux.HandleFunc("/operations", u.Operations)
 	mux.HandleFunc("/traces/{traceID}", u.Trace)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

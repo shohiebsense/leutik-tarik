@@ -1,0 +1,55 @@
+# leutik-tarik retention policy
+#
+# Precedence: highest priority wins, then most specific match, then file order.
+# A rule may not tie another on both priority and specificity (the loader
+# refuses that, because file order would silently decide retention).
+#
+# Durations accept "30m", "2h", "3d".
+version: 2
+
+defaults:
+  trace: 14d          # anything not matched below
+
+rules:
+  # Failures are the evidence an investigation needs: keep them longest.
+  - name: payment-write-errors
+    priority: 100
+    match:
+      service: "payment*"
+      http_method: [POST, PUT, PATCH]
+      route: ["/v1/payments/**"]
+      outcome: [error, server_error, client_error]
+    keep:
+      trace: 90d
+
+  - name: all-errors
+    priority: 90
+    match:
+      outcome: [error, server_error]
+    keep:
+      trace: 30d
+
+  # Slow successful requests are tomorrow's regression.
+  - name: slow-success
+    priority: 50
+    match:
+      outcome: [success]
+      min_duration: 2s
+    keep:
+      trace: 30d
+
+  # High-volume reads are cheap to lose.
+  - name: read-success
+    priority: 20
+    match:
+      http_method: [GET, HEAD]
+      outcome: [success]
+    keep:
+      trace: 2d
+
+  - name: db-operations
+    priority: 10
+    match:
+      operation_type: [db]
+    keep:
+      trace: 7d

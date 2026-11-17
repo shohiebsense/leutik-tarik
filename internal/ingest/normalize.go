@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/model"
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 )
 
 type normStats struct {
@@ -13,15 +14,13 @@ type normStats struct {
 	redacted     int
 }
 
-// defaultPolicy is stamped on every record until the policy engine exists
-// (Phase 4). Recorded rather than implied, so retention decisions stay
-// auditable per row.
-const defaultPolicy = "default"
-
 // normalize is the single path from wire data to a stored record: identity,
 // semantic attributes, kind, outcome and redaction are handled here only, so
 // JSON and protobuf cannot drift.
-func normalize(raw []rawSpan, ingestedAt time.Time) ([]model.Record, normStats) {
+func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model.Record, normStats) {
+	if eng == nil {
+		eng = policy.Default()
+	}
 	var stats normStats
 	out := make([]model.Record, 0, len(raw))
 	for _, r := range raw {
@@ -80,9 +79,16 @@ func normalize(raw []rawSpan, ingestedAt time.Time) ([]model.Record, normStats) 
 			Links:         r.links,
 		}
 
+		pd := eng.Evaluate(span)
 		out = append(out, model.Record{
-			Span:         span,
-			Decision:     model.Decision{PolicyID: defaultPolicy, PolicyVersion: 1, Sampled: true, Redactions: redacted, Retention: retentionFor(span)},
+			Span: span,
+			Decision: model.Decision{
+				PolicyID:      pd.PolicyID,
+				PolicyVersion: pd.PolicyVersion,
+				Sampled:       true,
+				Redactions:    redacted,
+				Retention:     pd.Retention,
+			},
 			Source:       provenance(r.attrs, "leutik.capture.source", "otlp-sdk"),
 			Completeness: completeness(r.attrs),
 			IngestedAt:   ingestedAt,
@@ -119,30 +125,6 @@ func firstOf(attrs map[string]string, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-// Default retention tiers, until the policy engine (Phase 4) reads them from
-// config. Values mirror the example policy in the build prompt; the decision is
-// stored on every row so a later change is auditable rather than retroactive.
-const (
-	retentionReadSuccess = 48 * time.Hour      // 2d  — cheap, high-volume reads
-	retentionErrors      = 30 * 24 * time.Hour // 30d — failures are the evidence
-	retentionDefault     = 14 * 24 * time.Hour // 14d — everything else
-)
-
-// retentionFor picks this row's lifetime. Kept deliberately dumb: a wrong class
-// here silently moves evidence to the wrong tier, so only unambiguous cases
-// get a special tier.
-func retentionFor(s model.Span) time.Duration {
-	if s.Outcome == model.OutcomeError || s.Outcome == model.OutcomeServerError {
-		return retentionErrors
-	}
-	if s.HTTPMethod == "GET" || s.HTTPMethod == "HEAD" {
-		if s.Outcome == model.OutcomeSuccess {
-			return retentionReadSuccess
-		}
-	}
-	return retentionDefault
 }
 
 // operationType is a conservative classification for retention selectors

@@ -7,12 +7,16 @@ import (
 	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/model"
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
 
 // UI serves the operations list and trace detail pages.
 type UI struct {
 	Store store.Store
+
+	// Policies drives the effective-config view and the retention preview.
+	Policies *policy.Engine
 
 	// now is injectable so time ranges are testable.
 	now func() time.Time
@@ -69,6 +73,37 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"Outcomes": outcomes,
 		"From":     from.Format(time.RFC3339),
 		"To":       to.Format(time.RFC3339),
+	})
+}
+
+// PoliciesPage shows the effective configuration after defaults, plus a preview
+// of what each rule would match in recent traffic (build prompt §10.2: preview
+// before activation, and show the effective config, not the file text).
+func (u UI) PoliciesPage(w http.ResponseWriter, r *http.Request) {
+	p := u.Policies.Policy()
+
+	// Preview against the same window the operations page uses.
+	to := u.clock()
+	from := to.Add(-24 * time.Hour)
+	spans, err := u.Store.ListOperations(r.Context(), store.Query{From: from, To: to, Limit: store.MaxLimit})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// measuredBytesPerSpan: 20.82 MiB for 2M spans, measured on ClickHouse
+	// 26.10 (docs/review-2026-11-17.md). An estimate, labelled as one.
+	const measuredBytesPerSpan = 11
+	preview := u.Policies.Preview(spans, to.Sub(from), measuredBytesPerSpan)
+
+	render(w, policiesView, map[string]any{
+		"Title":      "Policies",
+		"Policy":     p,
+		"Preview":    preview,
+		"Sampled":    len(spans),
+		"Defaults":   p.Defaults.Trace.Duration(),
+		"Window":     to.Sub(from),
+		"BytesPerDa": measuredBytesPerSpan,
 	})
 }
 
@@ -182,6 +217,7 @@ func itoa(n int) string {
 var (
 	operationsView = template.Must(template.Must(pageBase.Clone()).Parse(operationsTemplate))
 	traceView      = template.Must(template.Must(pageBase.Clone()).Parse(traceTemplate))
+	policiesView   = template.Must(template.Must(pageBase.Clone()).Parse(policiesTemplate))
 )
 
 func render(w http.ResponseWriter, t *template.Template, data map[string]any) {
@@ -218,11 +254,46 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 </style>
 </head>
 <body>
-<nav><a href="/operations">Operations</a></nav>
+<nav><a href="/operations">Operations</a><a href="/policies">Policies</a></nav>
 <h1>{{.Title}}</h1>
 {{template "content" .}}
 </body>
 </html>{{end}}`
+
+const policiesTemplate = `{{define "content"}}
+<p class="dim">Active policy version <b>{{.Policy.Version}}</b> · preview against the last {{.Window}} ({{.Sampled}} sampled operations) · storage estimate at {{.BytesPerDa}} B/span (measured)</p>
+
+<table>
+<thead><tr><th>Rule</th><th>Priority</th><th>Match</th><th>Keep (trace)</th><th>Matches (24h)</th><th>Est. bytes/day</th><th>Note</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>defaults</b></td>
+  <td>—</td>
+  <td class="dim">everything not matched by a rule</td>
+  <td>{{dur .Defaults}}</td>
+  <td>—</td>
+  <td>—</td>
+  <td></td>
+</tr>
+{{range .Preview}}
+<tr>
+  <td>{{.Name}}</td>
+  <td>{{.Priority}}</td>
+  <td class="dim">see policy source below</td>
+  <td>{{dur .Retention}}</td>
+  <td>{{.Matches}}</td>
+  <td>{{.BytesPerDay}}</td>
+  <td class="warn">{{if .ShadowedBy}}cannot take effect — claimed by {{.ShadowedBy}}{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+
+<details>
+<summary>Accessible table / policy source</summary>
+<pre>{{.Policy}}</pre>
+</details>
+{{end}}`
 
 const operationsTemplate = `{{define "content"}}
 <form method="get" action="/operations">

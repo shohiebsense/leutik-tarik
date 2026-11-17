@@ -59,6 +59,12 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       and emitted as OTLP. Proven end-to-end into ClickHouse (63 events).
       Constraint found: a uprobe cannot target a binary on a virtiofs/NFS mount
       (EIO); it needs local disk or hostPath.
+- [x] **S11 policy engine (Phase 4a)** — YAML rules with glob selectors,
+      explicit precedence (priority → specificity → rejected ties), validation
+      that fails at startup, retention decided per span and persisted, and a
+      `/policies` page showing the effective config + a 24h preview with dead
+      rules flagged. Proven: one policy produced 90d / 30d / 2d on three spans.
+      Deliberately NOT done: sampling, per-signal retention (`docs/policies.md`).
 - [ ] **S7 agent (Phase 1c) net/http spans** — the hard slice. Attach works;
       the unsolved part is reading `net/http` arguments under Go's register ABI
       (per-Go-version knowledge, the reason OBI is its own project). Timebox it:

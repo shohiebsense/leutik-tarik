@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/server"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
@@ -29,10 +30,11 @@ func main() {
 	}
 
 	st, label := pickStore()
+	policies := pickPolicy()
 
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: server.New(st),
+		Handler: server.New(st, policies),
 		// Bounded, so a slow client cannot hold a connection open indefinitely.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -59,6 +61,26 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+// pickPolicy loads the retention policy. A malformed policy is fatal: silently
+// falling back to defaults would change how long evidence is kept without
+// telling anyone.
+func pickPolicy() *policy.Engine {
+	path := os.Getenv("LEUTIK_POLICY_PATH")
+	if path == "" {
+		path = "config/policy.yaml"
+		if _, err := os.Stat(path); err != nil {
+			path = "config/policy.example.yaml"
+		}
+	}
+	p, err := policy.Load(path)
+	if err != nil {
+		log.Fatalf("policy %s: %v", path, err)
+	}
+	log.Printf("policy %s loaded: version %d, %d rules, default trace retention %s",
+		path, p.Version, len(p.Rules), p.Defaults.Trace.Duration())
+	return policy.New(p)
 }
 
 // pickStore uses ClickHouse when configured and the in-memory store otherwise,

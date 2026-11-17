@@ -59,7 +59,7 @@ const traceJSON = `{
 func TestIngestThenListAndDetail(t *testing.T) {
 	now := time.Now()
 	s := store.NewMemory()
-	h := server.New(s)
+	h := server.New(s, nil)
 
 	// Ingest. Timestamps are relative to now: the operations list defaults to a
 	// 24h window, so a 1970 fixture would (correctly) return nothing.

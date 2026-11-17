@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
 
@@ -21,6 +22,10 @@ const DefaultMaxBodyBytes int64 = 64 << 20
 // Handler is the OTLP/HTTP trace receiver.
 type Handler struct {
 	Store store.Store
+
+	// Policies decides retention per span. Nil means the conservative default
+	// (14 days, no rules), so an unconfigured install still behaves predictably.
+	Policies *policy.Engine
 
 	// MaxBodyBytes caps the *decompressed* request body. Zero uses
 	// DefaultMaxBodyBytes. Bounded on purpose: the build prompt lists
@@ -63,7 +68,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, stats := normalize(raw, time.Now().UTC())
+	records, stats := normalize(raw, time.Now().UTC(), h.Policies)
 	if len(records) > 0 {
 		if err := h.Store.Insert(r.Context(), records); err != nil {
 			http.Error(w, "store: "+err.Error(), http.StatusInternalServerError)

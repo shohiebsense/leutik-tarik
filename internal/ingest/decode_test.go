@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/otlpjson"
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 )
 
 func TestDecodeJSON(t *testing.T) {
@@ -35,7 +36,7 @@ func TestDecodeJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeJSON: %v", err)
 	}
-	records, stats := normalize(rs, time.Now())
+	records, stats := normalize(rs, time.Now(), nil)
 	if len(records) != 1 {
 		t.Fatalf("want 1 record, got %d", len(records))
 	}
@@ -145,7 +146,7 @@ func TestCompletenessAndSourceComeFromTheSender(t *testing.T) {
 		},
 		traceID: "aa", spanID: "bb", name: "uprobe main.fire",
 	}}
-	records, _ := normalize(raw, time.Now())
+	records, _ := normalize(raw, time.Now(), nil)
 	if len(records) != 1 {
 		t.Fatalf("want 1 record, got %d", len(records))
 	}
@@ -159,8 +160,39 @@ func TestCompletenessAndSourceComeFromTheSender(t *testing.T) {
 
 func TestCompleteIsTheDefaultForSDKSpans(t *testing.T) {
 	raw := []rawSpan{{resource: map[string]string{}, attrs: map[string]string{}, traceID: "aa", spanID: "bb"}}
-	records, _ := normalize(raw, time.Now())
+	records, _ := normalize(raw, time.Now(), nil)
 	if records[0].Completeness != "complete" || records[0].Source != "otlp-sdk" {
 		t.Errorf("defaults = %q/%q", records[0].Source, records[0].Completeness)
+	}
+}
+
+// The policy engine, not a hardcoded table, decides retention now, and the
+// decision is recorded per record.
+func TestRetentionComesFromPolicy(t *testing.T) {
+	p, err := policy.Parse([]byte(`
+version: 7
+defaults: {trace: 14d}
+rules:
+  - name: errors-live-long
+    priority: 100
+    match: {outcome: [server_error]}
+    keep: {trace: 90d}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []rawSpan{
+		{resource: map[string]string{"service.name": "api"}, attrs: map[string]string{"http.response.status_code": "500"}, traceID: "aa", spanID: "b1"},
+		{resource: map[string]string{"service.name": "api"}, attrs: map[string]string{"http.response.status_code": "200"}, traceID: "aa", spanID: "b2"},
+	}
+	records, _ := normalize(raw, time.Now(), policy.New(p))
+	if records[0].Decision.Retention != 90*24*time.Hour || records[0].Decision.PolicyID != "errors-live-long" {
+		t.Errorf("error span decision = %+v", records[0].Decision)
+	}
+	if records[1].Decision.Retention != 14*24*time.Hour || records[1].Decision.PolicyID != "default" {
+		t.Errorf("success span decision = %+v", records[1].Decision)
+	}
+	if records[0].Decision.PolicyVersion != 7 {
+		t.Errorf("policy version = %d, want 7", records[0].Decision.PolicyVersion)
 	}
 }

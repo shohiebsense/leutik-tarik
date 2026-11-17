@@ -14,6 +14,16 @@ ingest, the ClickHouse store, and the instrumentation agent are still missing.
 See `PLAN.md` for the corrected status and `docs/review-2026-11-17.md` for the
 full findings list.
 
+## Retention policy
+
+```sh
+LEUTIK_POLICY_PATH=config/policy.example.yaml go run ./cmd/leutik-tarik
+```
+
+Rules set retention per span at ingest (failures longest, high-volume reads
+shortest). `/policies` shows the effective config and what each rule would claim
+in the last 24h. See `docs/policies.md`.
+
 ## Run against ClickHouse (S4/S5 — dedupe, per-row retention, bloom index)
 
 ```sh
