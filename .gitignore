@@ -1,0 +1,23 @@
+# binaries
+/leutik-tarik
+/demo-sender
+*.exe
+*.test
+*.out
+
+# local config and secrets
+.env
+*.local.yaml
+/config.local.yaml
+
+# dev database state
+/clickhouse-data/
+/.lt-data/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# go tooling
+/vendor/

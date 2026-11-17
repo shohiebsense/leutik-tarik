@@ -1,0 +1,25 @@
+# Dev dependencies only. ClickHouse is the single stateful dependency by
+# design (build prompt §4); no Kafka/Redis/Elasticsearch.
+#
+# CLICKHOUSE_SKIP_USER_SETUP keeps the dev instance password-less so tests can
+# run without credential plumbing. Never use this setting anywhere real.
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.10
+    container_name: leutik-clickhouse
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP, loopback only
+      - "127.0.0.1:9000:9000"   # native protocol
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ./clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

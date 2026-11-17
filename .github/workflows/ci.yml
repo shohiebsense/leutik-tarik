@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # go.opentelemetry.io/proto/otlp v1.11.x requires Go 1.26.
+          go-version: '1.26'
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "not gofmt'd:"; echo "$out"; exit 1; fi
+
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+
+  # The ClickHouse-backed tests are gated on LEUTIK_CLICKHOUSE_URL and skip
+  # themselves when it is unset, so this job exists to prove they actually run.
+  clickhouse:
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.10
+        env:
+          CLICKHOUSE_SKIP_USER_SETUP: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:8123/ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: migrate
+        run: make migrate
+        env:
+          LEUTIK_CLICKHOUSE_URL: http://127.0.0.1:8123
+      - name: test with ClickHouse
+        run: go test ./... -count=1
+        env:
+          LEUTIK_CLICKHOUSE_URL: http://127.0.0.1:8123
