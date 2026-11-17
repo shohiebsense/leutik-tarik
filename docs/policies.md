@@ -51,6 +51,14 @@ A rule that never wins while another rule always claims its spans is marked
 **"cannot take effect"** with the winning rule named — so a dead rule is visible
 rather than silently useless.
 
+## Route format depends on the sender
+
+Routes are stored exactly as the instrumentation reports them. `otelgin` uses
+Gin's own form, `/v1/payments/:id`, **not** `/v1/payments/{id}`. A glob with
+`**` matches either, but a rule written with `{id}` will never match a Gin
+route. Check `/operations` for the real format on your service before writing
+rules.
+
 ## Not implemented (deliberate)
 
 - **Sampling.** The `sampled` flag is stored, but nothing drops spans yet.

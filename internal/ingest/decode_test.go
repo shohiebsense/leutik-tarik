@@ -196,3 +196,38 @@ rules:
 		t.Errorf("policy version = %d, want 7", records[0].Decision.PolicyVersion)
 	}
 }
+
+// Instrumentation libraries emit full SQL by default. Persisting it would put
+// member phone numbers and transaction ids into the evidence store, so the
+// value must be dropped on the way in.
+func TestSQLTextIsNeverStored(t *testing.T) {
+	attrs := map[string]string{
+		"db.query.text":        "SELECT * FROM customers WHERE primary_phone_number='62844420260702'",
+		"db.statement":         "UPDATE orders SET fare=1000 WHERE id='trx-99'",
+		"db.query.parameter.0": "62844420260702",
+		"db.system":            "postgresql",
+		"db.operation.name":    "SELECT",
+		"db.query.summary":     "SELECT customers",
+		"http.request.body":    `{"pin":"1234"}`,
+	}
+	n := redact(attrs)
+	if attrs["db.query.text"] != redactedPlaceholder {
+		t.Errorf("db.query.text stored: %q", attrs["db.query.text"])
+	}
+	if attrs["db.statement"] != redactedPlaceholder {
+		t.Errorf("db.statement stored: %q", attrs["db.statement"])
+	}
+	if attrs["db.query.parameter.0"] != redactedPlaceholder {
+		t.Errorf("db.query.parameter.0 stored: %q", attrs["db.query.parameter.0"])
+	}
+	if attrs["http.request.body"] != redactedPlaceholder {
+		t.Errorf("request body stored: %q", attrs["http.request.body"])
+	}
+	// Useful, non-sensitive context must survive.
+	if attrs["db.system"] != "postgresql" || attrs["db.query.summary"] != "SELECT customers" {
+		t.Errorf("safe attributes were removed: %+v", attrs)
+	}
+	if n < 4 {
+		t.Errorf("redacted count = %d, want >= 4", n)
+	}
+}

@@ -188,6 +188,26 @@ func outcome(statusCode, otlpStatus int) string {
 // sensitiveKeys are matched on the bare attribute name so both OTLP forms
 // (`authorization`, `http.request.header.authorization`) are covered (prompt
 // §15: credentials must be redacted before persistence).
+// sensitiveAttrKeys are attribute names that must never be persisted with their
+// value. db.query.text and db.statement are here because instrumentation
+// libraries emit the FULL SQL by default (otelpgx does: semconv.DBQueryText),
+// and a query string contains member identifiers, phone numbers and transaction
+// numbers. Redacting on the way in is the only point where it can be guaranteed.
+var sensitiveAttrKeys = []string{
+	"db.query.text",
+	"db.statement",
+	"db.query.parameter",
+	"db.statement.parameter",
+	"http.request.body",
+	"http.response.body",
+}
+
+// sensitiveKeyPrefixes catch families, e.g. db.query.parameter.0.
+var sensitiveKeyPrefixes = []string{
+	"db.query.parameter.",
+	"db.statement.parameter.",
+}
+
 var sensitiveKeys = []string{
 	"authorization",
 	"proxy-authorization",
@@ -230,6 +250,16 @@ func redact(attrs map[string]string) int {
 
 func isSensitive(key string) bool {
 	k := strings.ToLower(key)
+	for _, exact := range sensitiveAttrKeys {
+		if k == exact {
+			return true
+		}
+	}
+	for _, prefix := range sensitiveKeyPrefixes {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
 	for _, s := range sensitiveKeys {
 		if strings.Contains(k, s) {
 			return true

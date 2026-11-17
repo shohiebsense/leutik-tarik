@@ -83,6 +83,12 @@ Ordered so the schema is written once. Each step leaves build + tests green.
       instrumentation. Verified end-to-end: 6 requests -> 6 spans
       (`completeness=partial`, `source=agent`), outcomes correct.
       Remaining: method/route (per-Go-version offsets), goroutine-id correlation.
+- [x] **S16 integration guide: fare-membership over OTel** — exact deps
+      (versions resolved against the real repo), tracer setup, Gin/pgx/Redis
+      wiring, env config, verification steps and risks:
+      `docs/integration-fare-membership.md`. Two surprises documented: otelgin
+      reports routes as Gin `:param` (so `{id}` policy rules never match), and
+      otelpgx sends full SQL, which the platform now drops at ingest.
 - [ ] **S15 method + route from probes** — needs per-Go-version struct offsets
       (the OBI-style work); timebox and keep `completeness=partial` until then.
 
