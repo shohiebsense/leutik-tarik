@@ -117,3 +117,51 @@ func (c *ClickHouse) queryAggregate(ctx context.Context, sql string, args []any)
 	}
 	return out, nil
 }
+
+// EndpointStats ranks endpoints by total time in the window.
+func (c *ClickHouse) EndpointStats(ctx context.Context, from, to time.Time, limit int) ([]EndpointStat, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	sql := fmt.Sprintf(`SELECT service_name, http_route, http_method,
+			count() AS n,
+			countIf(outcome IN ('error', 'server_error')) AS errors,
+			quantile(0.5)(duration_ms) AS p50_ms,
+			quantile(0.95)(duration_ms) AS p95_ms,
+			avg(duration_ms) AS avg_ms,
+			sum(duration_ms) AS total_ms
+		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ? LIMIT 1 BY trace_id, span_id)
+		WHERE parent_span_id = '' AND http_route != ''
+		GROUP BY service_name, http_route, http_method
+		ORDER BY total_ms DESC
+		LIMIT %d`, limit)
+
+	rows, err := c.queryAggregate(ctx, sql, []any{chTime(from), chTime(to)})
+	if err != nil {
+		return nil, err
+	}
+	ms := func(v float64) time.Duration { return time.Duration(v * float64(time.Millisecond)) }
+	var out []EndpointStat
+	for _, raw := range rows {
+		var r struct {
+			Service string  `json:"service_name"`
+			Route   string  `json:"http_route"`
+			Method  string  `json:"http_method"`
+			N       int64   `json:"n"`
+			Errors  int64   `json:"errors"`
+			P50     float64 `json:"p50_ms"`
+			P95     float64 `json:"p95_ms"`
+			Avg     float64 `json:"avg_ms"`
+			Total   float64 `json:"total_ms"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		out = append(out, EndpointStat{
+			Service: r.Service, Route: r.Route, Method: r.Method,
+			Count: r.N, Errors: r.Errors,
+			P50: ms(r.P50), P95: ms(r.P95), Avg: ms(r.Avg), Total: ms(r.Total),
+		})
+	}
+	return out, nil
+}

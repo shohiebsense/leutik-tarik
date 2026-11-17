@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/pprof/profile"
 
@@ -62,6 +63,8 @@ func (u UI) ProfileDetail(w http.ResponseWriter, r *http.Request) {
 
 // flamegraph is a simple icicle layout of a pprof profile.
 type flamegraph struct {
+	// Top ranks functions by self time: the actionable ordering.
+	Top       []store.TopFunction
 	HTML      template.HTML
 	Width     int
 	Height    int
@@ -114,6 +117,38 @@ func buildFlamegraph(data []byte, width int) (flamegraph, error) {
 			cur = childNamed(cur, name)
 		}
 		cur.value += v
+	}
+
+	// Self time: the leaf frame is where the sample was actually taking time,
+	// so ranking by it points at the function to fix rather than its callers.
+	self := map[string]int64{}
+	cum := map[string]int64{}
+	for _, s := range prof.Sample {
+		v := s.Value[sampleIndex(prof)]
+		leaf := leafName(s)
+		if leaf != "" {
+			self[leaf] += v
+		}
+		seen := map[string]struct{}{}
+		for _, f := range stackNames(s) {
+			if _, dup := seen[f]; dup {
+				continue
+			}
+			seen[f] = struct{}{}
+			cum[f] += v
+		}
+	}
+	top := make([]store.TopFunction, 0, len(self))
+	for name, v := range self {
+		tf := store.TopFunction{Name: name, Self: v, Cum: cum[name]}
+		if total > 0 {
+			tf.SelfPct = float64(v) / float64(total) * 100
+		}
+		top = append(top, tf)
+	}
+	sort.Slice(top, func(i, j int) bool { return top[i].Self > top[j].Self })
+	if len(top) > 25 {
+		top = top[:25]
 	}
 
 	var measure func(n *fgNode, depth int) int64
@@ -179,6 +214,7 @@ func buildFlamegraph(data []byte, width int) (flamegraph, error) {
 	b.WriteString(`</svg>`)
 
 	return flamegraph{
+		Top:       top,
 		HTML:      template.HTML(b.String()),
 		Width:     width,
 		Height:    height,
@@ -270,6 +306,20 @@ func policyDuration(v int64, prof *profile.Profile) string {
 
 // sampleIndex picks the value column to chart: the profile's default sample
 // type when it matches, otherwise the last column (sample counts for CPU).
+// leafName is the innermost frame of a sample.
+func leafName(s *profile.Sample) string {
+	if len(s.Location) == 0 {
+		return ""
+	}
+	loc := s.Location[0]
+	for _, line := range loc.Line {
+		if line.Function != nil && line.Function.Name != "" {
+			return cleanFuncName(line.Function.Name)
+		}
+	}
+	return fmt.Sprintf("0x%x", loc.Address)
+}
+
 func sampleIndex(p *profile.Profile) int {
 	// DefaultSampleType is a sample-type NAME in modern pprof (empty when the
 	// profile does not name one).
@@ -284,4 +334,17 @@ func sampleIndex(p *profile.Profile) int {
 		return 0
 	}
 	return len(p.SampleType) - 1
+}
+
+// nsDuration renders a nanosecond sample value as a duration.
+func nsDuration(v int64) string {
+	d := time.Duration(v)
+	switch {
+	case d < time.Millisecond:
+		return d.Round(time.Microsecond).String()
+	case d < time.Second:
+		return d.Round(time.Millisecond).String()
+	default:
+		return d.Round(10 * time.Millisecond).String()
+	}
 }

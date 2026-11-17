@@ -45,6 +45,9 @@ type ErrorGroup struct {
 type Stats interface {
 	ServiceStats(ctx context.Context, from, to time.Time) ([]ServiceStat, error)
 	ErrorGroups(ctx context.Context, from, to time.Time, limit int) ([]ErrorGroup, error)
+	// EndpointStats ranks endpoints by total time: the "what do I tune first"
+	// list. Ordered by Total descending.
+	EndpointStats(ctx context.Context, from, to time.Time, limit int) ([]EndpointStat, error)
 }
 
 // ProfileMeta is one stored profile artefact.
@@ -72,3 +75,46 @@ const dedupNote = "count each (trace_id, span_id) once"
 
 var _ = dedupNote
 var _ = model.OutcomeError
+
+// EndpointStat ranks one endpoint by where time is spent.
+//
+// Total is what "which endpoint do I tune first" actually needs: an endpoint
+// with a 2s p95 hit 10 times costs more than one with 4s hit twice. Count is
+// kept alongside so a single freak request is visible as a single freak request.
+type EndpointStat struct {
+	Service string
+	Route   string
+	Method  string
+	Count   int64
+	Errors  int64
+	P50     time.Duration
+	P95     time.Duration
+	Avg     time.Duration
+	Total   time.Duration
+}
+
+// ErrorRate returns errors/count.
+func (e EndpointStat) ErrorRate() float64 {
+	if e.Count == 0 {
+		return 0
+	}
+	return float64(e.Errors) / float64(e.Count)
+}
+
+// TopFunctions ranks functions by self time inside one profile.
+//
+// Self time is the actionable number: it is time spent *in* the function, not
+// in what it called. Sort by it and the top row is where to look.
+type TopFunction struct {
+	Name    string
+	Self    int64
+	Cum     int64
+	SelfPct float64
+}
+
+// FunctionRanking is a profile's hot functions, already ordered.
+type FunctionRanking struct {
+	Functions []TopFunction
+	Unit      string
+	Total     int64
+}

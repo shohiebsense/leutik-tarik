@@ -254,6 +254,16 @@ var funcs = template.FuncMap{
 	"pctnum": func(f float64) string { return fmt.Sprintf("%.1f%%", f*100) },
 	"bar":    func(n, max int64) template.CSS { return barWidth(n, max) },
 	"class":  func(outcome string) string { return severityClass(outcome) },
+	"share":  func(e store.EndpointStat, grand time.Duration) float64 { return shareOf(e, grand) },
+	"inc":    func(i int) int { return i + 1 },
+	"div": func(a, b float64) float64 {
+		if b == 0 {
+			return 0
+		}
+		return a / b
+	},
+	"pctFrac": func(f float64) template.CSS { return pctWidth(f) },
+	"ns":      func(v int64) string { return nsDuration(v) },
 	"indent": func(n int) template.CSS {
 		// CSS width, not nested spans: keeps the table a table.
 		px := n * 16
@@ -359,12 +369,34 @@ const profileDetailTemplate = `{{define "content"}}
 <p class="dim">{{.Flame.Frames}} frames · total {{.Flame.Total}} {{.Flame.Unit}}{{if .Flame.Truncated}} · capped at depth 40{{end}}</p>
 {{.Flame.HTML}}
 <p class="dim">Width is cost, each row is stack depth, hover a bar for the frame. This is a profile of a time window, not of a single request.</p>
+
+<h2>Hot functions by self time</h2>
+<p class="dim">Self time is time spent <i>in</i> the function itself, excluding what it called — the ranking to act on. Cumulative includes children.</p>
+<table>
+<thead><tr><th>#</th><th>Function</th><th>Self</th><th>Self %</th><th>Cumulative</th></tr></thead>
+<tbody>
+{{range $i, $f := .Flame.Top}}
+<tr>
+  <td class="dim">{{inc $i}}</td>
+  <td><code>{{$f.Name}}</code></td>
+  <td><b>{{ns $f.Self}}</b></td>
+  <td>
+    <span class="bar"><span class="fill bad-bg" style="{{pctFrac (div $f.SelfPct 100)}}"></span></span>
+    {{printf "%.1f%%" $f.SelfPct}}
+  </td>
+  <td class="dim">{{ns $f.Cum}}</td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="dim">No self time attributed — the profile may contain only samples without user frames.</td></tr>
+{{end}}
+</tbody>
+</table>
 {{end}}
 <a href="/profiles">← all profiles</a>
 {{end}}`
 
 const servicesTemplate = `{{define "content"}}
-<p class="dim">{{.Window}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
+<p class="dim">{{human .Window}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
 
 <table>
 <thead><tr><th>Service</th><th>Operations</th><th>Errors</th><th>Error rate</th><th>p50</th><th>p95</th><th>Routes</th><th>Last seen</th></tr></thead>
@@ -388,10 +420,38 @@ const servicesTemplate = `{{define "content"}}
 {{end}}
 </tbody>
 </table>
+
+<h2>Top endpoints by total time</h2>
+<p class="dim">Ranked by the time this endpoint consumed in the window (count × duration), not by its worst single request. This is the order to tune in: the top row is where the latency budget actually goes.</p>
+<table>
+<thead><tr><th>#</th><th>Endpoint</th><th>Service</th><th>Requests</th><th>Total time</th><th>Share</th><th>p50</th><th>p95</th><th>Errors</th></tr></thead>
+<tbody>
+{{range $i, $e := .Endpoints}}
+<tr>
+  <td class="dim">{{inc $i}}</td>
+  <td>{{if $e.Method}}{{$e.Method}} {{end}}{{$e.Route}}</td>
+  <td>{{$e.Service}}</td>
+  <td>{{$e.Count}}</td>
+  <td><b>{{dur $e.Total}}</b></td>
+  <td>
+    <span class="bar"><span class="fill" style="{{pct (share $e $.GrandTotal)}}"></span></span>
+    {{pctnum (share $e $.GrandTotal)}}
+  </td>
+  <td>{{dur $e.P50}}</td>
+  <td>{{dur $e.P95}}</td>
+  <td class="{{if gt $e.Errors 0}}bad{{end}}">{{$e.Errors}}</td>
+</tr>
+{{else}}
+<tr><td colspan="9" class="dim">No HTTP endpoints in this window.</td></tr>
+{{end}}
+</tbody>
+</table>
 {{end}}`
 
+const servicesTemplateExtra = `{{define "_unused"}}{{end}}`
+
 const incidentsTemplate = `{{define "content"}}
-<p class="dim">{{.Window}} window · {{.Total}} failed operations across {{len .Groups}} fingerprints</p>
+<p class="dim">{{human .Window}} window · {{.Total}} failed operations across {{len .Groups}} fingerprints</p>
 
 <table>
 <thead><tr><th>Count</th><th>Service</th><th>Route</th><th>Outcome</th><th>Error</th><th>Message</th><th>Traces</th><th>First seen</th><th>Last seen</th></tr></thead>

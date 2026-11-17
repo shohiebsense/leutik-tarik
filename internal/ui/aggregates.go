@@ -26,6 +26,16 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	endpoints, err := stats.EndpointStats(r.Context(), from, to, 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var grandTotal time.Duration
+	for _, e := range endpoints {
+		grandTotal += e.Total
+	}
+
 	// Worst error rate first, so the broken thing is at the top.
 	var totalSpans, totalErrors int64
 	for _, s := range rows {
@@ -40,6 +50,9 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		"Window":      to.Sub(from),
 		"TotalSpans":  totalSpans,
 		"TotalErrors": totalErrors,
+		"Endpoints":   endpoints,
+		"GrandTotal":  grandTotal,
+		"Share":       shareOf,
 	})
 }
 
@@ -74,6 +87,14 @@ func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 		"Max":     max,
 		"Classes": severityClass,
 	})
+}
+
+// shareOf renders one endpoint's slice of the total latency budget.
+func shareOf(e store.EndpointStat, grand time.Duration) float64 {
+	if grand <= 0 {
+		return 0
+	}
+	return float64(e.Total) / float64(grand)
 }
 
 // severityClass maps an outcome to the CSS class used for emphasis.

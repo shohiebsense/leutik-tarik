@@ -139,3 +139,68 @@ func percentile(sorted []time.Duration, q float64) time.Duration {
 	}
 	return sorted[idx]
 }
+
+// EndpointStats ranks endpoints by total time, matching the ClickHouse query.
+func (m *Memory) EndpointStats(_ context.Context, from, to time.Time, limit int) ([]EndpointStat, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	type key struct{ svc, route, method string }
+	type acc struct {
+		n, errors int64
+		durations []time.Duration
+		total     time.Duration
+	}
+	by := map[key]*acc{}
+	seen := map[string]struct{}{}
+	for _, r := range m.records {
+		s := r.Span
+		if s.ParentSpanID != "" || s.HTTPRoute == "" {
+			continue
+		}
+		if s.StartTime.Before(from) || s.StartTime.After(to) {
+			continue
+		}
+		k := s.TraceID + "|" + s.SpanID
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+
+		kk := key{s.ServiceName, s.HTTPRoute, s.HTTPMethod}
+		a := by[kk]
+		if a == nil {
+			a = &acc{}
+			by[kk] = a
+		}
+		a.n++
+		if s.Outcome == "error" || s.Outcome == "server_error" {
+			a.errors++
+		}
+		a.durations = append(a.durations, s.Duration)
+		a.total += s.Duration
+	}
+
+	out := make([]EndpointStat, 0, len(by))
+	for k, a := range by {
+		sort.Slice(a.durations, func(i, j int) bool { return a.durations[i] < a.durations[j] })
+		var avg time.Duration
+		if a.n > 0 {
+			avg = a.total / time.Duration(a.n)
+		}
+		out = append(out, EndpointStat{
+			Service: k.svc, Route: k.route, Method: k.method,
+			Count: a.n, Errors: a.errors,
+			P50: percentile(a.durations, 0.50), P95: percentile(a.durations, 0.95),
+			Avg: avg, Total: a.total,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Total > out[j].Total })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
