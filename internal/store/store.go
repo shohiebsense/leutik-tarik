@@ -81,6 +81,11 @@ func (m *Memory) ListOperations(_ context.Context, q Query) ([]model.Span, error
 		if s.ParentSpanID != "" {
 			continue
 		}
+		// Same rule as the ClickHouse query: a client span without a parent is a
+		// background dependency call, not an operation.
+		if s.Kind == "client" || s.Kind == "producer" {
+			continue
+		}
 		if q.Service != "" && s.ServiceName != q.Service {
 			continue
 		}

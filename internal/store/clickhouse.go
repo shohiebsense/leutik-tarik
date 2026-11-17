@@ -109,7 +109,10 @@ func (c *ClickHouse) Insert(ctx context.Context, records []model.Record) error {
 func (c *ClickHouse) ListOperations(ctx context.Context, q Query) ([]model.Span, error) {
 	var where []string
 	var args []any
-	where = append(where, "parent_span_id = ''")
+	// An operation is something that received work. A client span with no
+	// parent (a background Redis call, a scheduled DB job) is a dependency that
+	// happens to be a root - listing it as an operation buries the real one.
+	where = append(where, "parent_span_id = ''", "kind != 'client'", "kind != 'producer'")
 	if q.Service != "" {
 		where = append(where, "service_name = ?")
 		args = append(args, q.Service)

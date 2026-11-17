@@ -70,3 +70,31 @@ func TestEndpointStatsCountsErrors(t *testing.T) {
 		t.Errorf("error rate = %v, want 0.5", rate)
 	}
 }
+
+// A background Redis call has no parent. It must not be listed as an operation,
+// or 254 of them bury the two real HTTP requests.
+func TestOperationsExcludeClientRoots(t *testing.T) {
+	s := store.NewMemory()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	server := model.Record{Span: model.Span{
+		TraceID: "t1", SpanID: "s1", ServiceName: "svc", Kind: "server",
+		HTTPRoute: "/healthcheck", HTTPMethod: "GET", Outcome: model.OutcomeSuccess,
+		StartTime: now, EndTime: now.Add(time.Millisecond), Duration: time.Millisecond,
+	}}
+	redisRoot := model.Record{Span: model.Span{
+		TraceID: "t2", SpanID: "s2", ServiceName: "svc", Kind: "client", Name: "get",
+		Outcome: model.OutcomeSuccess, StartTime: now, EndTime: now.Add(time.Millisecond),
+	}}
+	if err := s.Insert(ctx, []model.Record{server, redisRoot}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListOperations(ctx, store.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SpanID != "s1" {
+		t.Fatalf("operations = %d (want only the server span): %+v", len(got), got)
+	}
+}
