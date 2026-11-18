@@ -374,3 +374,45 @@ func TestBodyCapturedButSecretsScrubbed(t *testing.T) {
 // scrubbed; everyone else's stays scrubbed.
 // The allowlisted account's record is readable end to end, including the
 // Authorization header the caller sent to the traced service.
+
+// Redaction is a deployment switch, not a per-account rule. The earlier
+// allowlist keyed on the traced account, so every trace belonging to a different
+// customer stayed masked while the one allowlisted account looked fine.
+func TestRedactionIsDeploymentScoped(t *testing.T) {
+	old := redactionEnabled
+	defer func() { redactionEnabled = old }()
+
+	record := func() map[string]string {
+		return map[string]string{
+			"enduser.id":                        "5452_@yopmail.com", // deliberately NOT the operator
+			"http.request.body":                 `{"password":"hunter2"}`,
+			"http.request.header.authorization": "Basic abc123",
+		}
+	}
+
+	// On (the default): scrubbed for everyone.
+	redactionEnabled = true
+	on := record()
+	if n := redact(on); n == 0 {
+		t.Fatal("nothing redacted with redaction on")
+	}
+	if strings.Contains(on["http.request.body"], "hunter2") {
+		t.Error("body leaked with redaction on")
+	}
+	if on["http.request.header.authorization"] != redactedPlaceholder {
+		t.Error("authorization leaked with redaction on")
+	}
+
+	// Off (dev): readable even though the account is not the operator's.
+	redactionEnabled = false
+	off := record()
+	if n := redact(off); n != 0 {
+		t.Fatalf("redacted %d fields with redaction off", n)
+	}
+	if !strings.Contains(off["http.request.body"], "hunter2") {
+		t.Error("body still masked with redaction off")
+	}
+	if off["http.request.header.authorization"] != "Basic abc123" {
+		t.Error("authorization still masked with redaction off")
+	}
+}
