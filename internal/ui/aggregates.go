@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
 
@@ -19,7 +20,7 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this store cannot aggregate", http.StatusNotImplemented)
 		return
 	}
-	from, to := u.window(r)
+	from, to, win := u.window(r, time.Hour)
 	rows, err := stats.ServiceStats(r.Context(), from, to)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -45,12 +46,9 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		totalSpans += s.Spans
 		totalErrors += s.Errors
 	}
-	render(w, r, servicesView, map[string]any{
+	render(w, r, servicesView, merge(map[string]any{
 		"Title":       "Services",
 		"Rows":        rows,
-		"From":        from.Format(inputTimeLayout),
-		"To":          to.Format(inputTimeLayout),
-		"Window":      to.Sub(from),
 		"TotalSpans":  totalSpans,
 		"TotalErrors": totalErrors,
 		"Endpoints":   endpoints,
@@ -59,7 +57,7 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		"Flagged":     flagged,
 		"Config":      cfg,
 		"Judgements":  judgementIndex(cfg, endpoints),
-	})
+	}, win))
 }
 
 // ServiceDetail is one service's page: its numbers, its slowest endpoints and
@@ -72,7 +70,7 @@ func (u UI) ServiceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("service")
-	from, to := u.window(r)
+	from, to, win := u.window(r, time.Hour)
 
 	all, err := stats.ServiceStats(r.Context(), from, to)
 	if err != nil {
@@ -118,18 +116,15 @@ func (u UI) ServiceDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	render(w, r, serviceDetailView, map[string]any{
+	render(w, r, serviceDetailView, merge(map[string]any{
 		"Title":      name,
 		"Service":    name,
 		"Stat":       stat,
 		"Endpoints":  mine,
 		"Bad4":       bad4,
 		"Bad5":       bad5,
-		"From":       from.Format(inputTimeLayout),
-		"To":         to.Format(inputTimeLayout),
-		"Window":     to.Sub(from),
 		"Judgements": judgementIndex(u.Verdicts(), mine),
-	})
+	}, win))
 }
 
 // Incidents groups failures by fingerprint so frequency is visible.
@@ -139,7 +134,7 @@ func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this store cannot aggregate", http.StatusNotImplemented)
 		return
 	}
-	from, to := u.window(r)
+	from, to, win := u.window(r, time.Hour)
 	groups, err := stats.ErrorGroups(r.Context(), from, to, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -153,16 +148,13 @@ func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 			max = g.Count
 		}
 	}
-	render(w, r, incidentsView, map[string]any{
+	render(w, r, incidentsView, merge(map[string]any{
 		"Title":   "Incidents",
 		"Groups":  groups,
-		"From":    from.Format(inputTimeLayout),
-		"To":      to.Format(inputTimeLayout),
-		"Window":  to.Sub(from),
 		"Total":   total,
 		"Max":     max,
 		"Classes": severityClass,
-	})
+	}, win))
 }
 
 // Verdicts returns the configured thresholds, falling back to the defaults.
@@ -202,18 +194,51 @@ func severityClass(outcome string) string {
 	}
 }
 
-// window reads the from/to query parameters, defaulting to the last hour for
-// aggregation views (a day of raw spans is rarely what a RED view wants).
-func (u UI) window(r *http.Request) (from, to time.Time) {
+// window reads the range for an aggregation view: a rolling `last` window
+// (default one hour, because a day of raw spans is rarely what a RED view
+// wants) or absolute from/to for a pinned investigation. It returns the display
+// data too, so a page cannot show a range in one zone and query in another -
+// that is exactly how /services ended up printing UTC while every other page
+// printed Jakarta.
+func (u UI) window(r *http.Request, def time.Duration) (from, to time.Time, meta map[string]any) {
 	to = u.clock()
-	from = to.Add(-time.Hour)
+	span, ok := lastWindow(r.URL.Query().Get("last"))
+	if !ok {
+		span = def
+	}
+	from = to.Add(-span)
+	live := true
 	if t, ok := parseTime(r.URL.Query().Get("from")); ok {
-		from = t
+		from, live = t, false
 	}
 	if t, ok := parseTime(r.URL.Query().Get("to")); ok {
-		to = t
+		to, live = t, false
 	}
-	return from, to
+	last := ""
+	if live {
+		last = durationParam(span)
+	}
+	base := r.URL.Path
+	query := r.URL.Query()
+	return from, to, map[string]any{
+		"From":        inDisplay(from).Format(inputTimeLayout),
+		"To":          inDisplay(to).Format(inputTimeLayout),
+		"Window":      to.Sub(from),
+		"WindowLabel": policy.HumanDuration(to.Sub(from)),
+		"Live":        live,
+		"Last":        last,
+		"Presets":     windowPresets(base, query),
+		"LiveURL":     liveURL(base, query, last),
+		"PinnedURL":   windowURL(base, query, inDisplay(from).Format(inputTimeLayout), inDisplay(to).Format(inputTimeLayout)),
+	}
+}
+
+// merge flattens a window's display data into a page's template data.
+func merge(data, meta map[string]any) map[string]any {
+	for k, v := range meta {
+		data[k] = v
+	}
+	return data
 }
 
 // barWidth renders a proportional inline bar without client-side code.

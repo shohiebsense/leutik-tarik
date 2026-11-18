@@ -821,7 +821,13 @@ func render(w http.ResponseWriter, r *http.Request, t *template.Template, data m
 
 var pageBase = template.Must(template.New("page").Funcs(funcs).Parse(pageShell))
 
-const pageShell = `{{define "page"}}<!doctype html>
+const pageShell = `{{/* One period control for every page that has a window, so the click
+targets are identical wherever the reader is. */}}
+{{define "period"}}<p class="presets"><span class="k">period</span>
+  {{range .Presets}}<a href="{{.URL}}" class="{{if .On}}on{{end}}">{{.Label}}</a>{{end}}
+  {{if .Live}}<a class="clear" href="{{.PinnedURL}}">freeze</a>{{else}}<a class="clear" href="{{.LiveURL}}">back to live</a>{{end}}
+</p>{{end}}
+{{define "page"}}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1157,6 +1163,7 @@ const servicesTemplate = `{{define "content"}}
 <p class="dim">No endpoint exceeded the thresholds in this window (median ≤ {{short .Config.SlowMedian}}, p95 ≤ {{short .Config.SlowP95}}, &lt;5% failures, ≥{{.Config.MinSamples}} hits).</p>
 {{end}}
 
+{{template "period" .}}
 <p class="dim">{{.WindowLabel}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
 
 <table>
@@ -1213,7 +1220,8 @@ const servicesTemplate = `{{define "content"}}
 const servicesTemplateExtra = `{{define "_unused"}}{{end}}`
 
 const serviceDetailTemplate = `{{define "content"}}
-<p class="dim">{{human .Window}} window · {{.Stat.Spans}} operations · {{.Stat.Errors}} failed · p50 {{dur .Stat.P50}} · p95 {{dur .Stat.P95}} · {{.Stat.Routes}} routes</p>
+{{template "period" .}}
+<p class="dim">{{human .Window}} window · {{.Stat.Spans}} operations · {{.Stat.Errors}} failed · p50 {{dur .Stat.P50}} · p95 {{dur .Stat.P95}} · {{.Stat.Routes}} routes · from {{.From}} to {{.To}}</p>
 
 <h2>Worth checking</h2>
 {{if or .Bad5 .Bad4}}
@@ -1283,7 +1291,8 @@ const serviceDetailTemplate = `{{define "content"}}
 {{end}}`
 
 const incidentsTemplate = `{{define "content"}}
-<p class="dim">{{human .Window}} window · {{.Total}} failed operations across {{len .Groups}} fingerprints</p>
+{{template "period" .}}
+<p class="dim">{{human .Window}} window · {{.Total}} failed operations across {{len .Groups}} fingerprints · from {{.From}} to {{.To}}</p>
 
 <table>
 <thead><tr><th>Count</th><th>Service</th><th>Route</th><th>Outcome</th><th>Error</th><th>Message</th><th>Traces</th><th>First seen</th><th>Last seen</th></tr></thead>

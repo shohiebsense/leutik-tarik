@@ -226,3 +226,48 @@ func TestDurationParam(t *testing.T) {
 		}
 	}
 }
+
+// Every page with a window must print it in the deployment's zone. /services
+// printed UTC while /operations printed Jakarta, which is how the same hour
+// looked like two different hours depending on the page.
+func TestAggregatePagesUseDisplayZone(t *testing.T) {
+	now := time.Date(2026, 11, 18, 16, 55, 0, 0, time.UTC) // 23:55 WIB
+	u := UI{Store: store.NewMemory(), now: func() time.Time { return now }}
+	for _, path := range []string{"/services", "/services/anything", "/incidents"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.SetPathValue("service", "anything")
+		switch path {
+		case "/services":
+			u.Services(rec, req)
+		case "/incidents":
+			u.Incidents(rec, req)
+		default:
+			// An unknown service is a 404 from the empty memory store; that is
+			// fine, the zone bug was only ever in the rendered table.
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "16:55") {
+			t.Errorf("%s still renders UTC (16:55) instead of Jakarta (23:55)", path)
+		}
+		if !strings.Contains(body, "23:55") {
+			t.Errorf("%s does not render the window end in the display zone: %s", path, footerLine(body))
+		}
+		if !strings.Contains(body, `class="presets"`) {
+			t.Errorf("%s has no period control", path)
+		}
+	}
+}
+
+// Switching period on an aggregate page must keep its own path.
+func TestAggregatePresetsStayOnPage(t *testing.T) {
+	now := time.Date(2026, 11, 18, 16, 55, 0, 0, time.UTC)
+	u := UI{Store: store.NewMemory(), now: func() time.Time { return now }}
+	rec := httptest.NewRecorder()
+	u.Services(rec, httptest.NewRequest(http.MethodGet, "/services?last=6h", nil))
+	href := linkAfter(rec.Body.String(), ">24h</a>")
+	if !strings.Contains(href, "/services") || strings.Contains(href, "last=6h") {
+		t.Errorf("preset link = %q", href)
+	}
+}
