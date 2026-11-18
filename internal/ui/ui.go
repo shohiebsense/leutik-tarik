@@ -162,6 +162,77 @@ type traceRow struct {
 	TreeHTML template.HTML
 }
 
+// traceHeadline describes the operation in the terms a person asked the
+// question in: the HTTP request, not a 32-character trace id. The id stays, as a
+// subtitle instead of the title.
+func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, req *traceRequest) {
+	var root model.Span
+	found := false
+	for _, s := range spans {
+		if s.ParentSpanID == "" {
+			root, found = s, true
+			break
+		}
+	}
+	if !found {
+		return "Trace", traceID, nil
+	}
+
+	name := root.Name
+	if root.HTTPRoute != "" {
+		name = strings.TrimSpace(root.HTTPMethod + " " + root.HTTPRoute)
+	}
+	title = name
+	subtitle = "trace " + traceID + " · " + root.ServiceName
+
+	req = &traceRequest{
+		Method:    root.HTTPMethod,
+		Route:     root.HTTPRoute,
+		Target:    root.Attributes["http.target"],
+		Status:    root.StatusCode,
+		ClientIP:  root.Attributes["http.client_ip"],
+		UserAgent: root.Attributes["user_agent.original"],
+		Service:   root.ServiceName,
+	}
+	if req.Method == "" && req.Route == "" && req.Target == "" {
+		req = nil
+	}
+	return title, subtitle, req
+}
+
+// traceRequest is the request metadata shown above the waterfall.
+type traceRequest struct {
+	Method    string
+	Route     string
+	Target    string
+	Status    int
+	ClientIP  string
+	UserAgent string
+	Service   string
+}
+
+// traceStamp is the top-right block: when it started, in the display zone.
+func traceStamp(summary model.Summary, root model.Span) template.HTML {
+	start := root.StartTime
+	if start.IsZero() {
+		return ""
+	}
+	stamp := inDisplay(start)
+	_, offset := stamp.Zone()
+	sign := "+"
+	if offset < 0 {
+		sign = "-"
+		offset = -offset
+	}
+	tz := fmt.Sprintf("%s UTC%s%02d:%02d", displayLocation.String(), sign, offset/3600, (offset%3600)/60)
+	return template.HTML(fmt.Sprintf(
+		`<span class="big">%s</span><span style="display:block;font-size:.85rem;color:#333">%s · %s</span><span class="tz">%s</span>`,
+		template.HTMLEscapeString(stamp.Format("Mon 02 Jan 2006")),
+		template.HTMLEscapeString(stamp.Format("15:04:05.000")),
+		template.HTMLEscapeString(shortDur(summary.Duration)),
+		template.HTMLEscapeString(tz)))
+}
+
 // treeHTML nests one block per depth level, so the guide line is drawn by CSS on
 // each level and cannot leave the gaps a glyph-based tree produces.
 func treeHTML(depth int, name string) template.HTML {
@@ -272,15 +343,19 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 		details = append(details, d)
 	}
 
+	headline, subtitle, req := traceHeadline(spans, traceID)
 	render(w, traceView, map[string]any{
-		"Details":    details,
-		"Title":      "Trace " + traceID,
-		"TraceID":    traceID,
-		"Rows":       rows,
-		"Summary":    summary,
-		"ExactLogs":  exact,
-		"Correlated": correlated,
-		"Waterfall":  buildWaterfall(spans, 980),
+		"Details":     details,
+		"Title":       headline,
+		"Subtitle":    subtitle,
+		"HeaderRight": traceStamp(summary, spans[0]),
+		"Request":     req,
+		"TraceID":     traceID,
+		"Rows":        rows,
+		"Summary":     summary,
+		"ExactLogs":   exact,
+		"Correlated":  correlated,
+		"Waterfall":   buildWaterfall(spans, 980),
 	})
 }
 
@@ -433,6 +508,10 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bad{color:#b00020}
 .warn{color:#8a5b00}
 .dim{color:#666}
+.reqstrip{margin:.2rem 0 .6rem;min-width:0}
+.reqstrip td{border:0;padding:.1rem 1.2rem .1rem 0;vertical-align:top}
+.reqstrip .k{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#888}
+.reqstrip b{font-size:.9rem;font-weight:600;word-break:break-word}
 .summary{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0 1rem}
 .summary div{min-width:9rem}
 .summary b{display:block;font-size:1.05rem;overflow-wrap:anywhere}
@@ -441,7 +520,15 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill{display:block;height:8px;background:#1a7f37}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
-.zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
+.zone{font-size:.75rem;color:#777;margin:.1rem 0 .8rem}
+.pagetop{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap}
+.pagetop h1{margin:.2rem 0 .25rem}
+.sub{margin:0;font-size:.85rem;color:#555}
+.sub code{background:#f2f2f2;padding:.05rem .3rem;font-size:.8rem}
+.topright{text-align:right;font-size:.85rem;color:#333;white-space:nowrap}
+.topright .big{display:block;font-size:1rem;font-weight:600}
+.topright .tz{display:block;font-size:.75rem;color:#777}
+@media (max-width:700px){.topright{text-align:left}}
 /* The tree glyphs must touch between rows: any vertical padding or leading above
    1 leaves a gap and the bars read as disconnected marks. */
 table td.tree{padding-top:.15rem;padding-bottom:.15rem}
@@ -482,7 +569,13 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
 <body>
 <div class="wrap">
 <nav><a href="/operations">Operations</a><a href="/services">Services</a><a href="/incidents">Incidents</a><a href="/profiles">Profiles</a><a href="/policies">Policies</a></nav>
-<h1>{{.Title}}</h1>
+<div class="pagetop">
+  <div>
+    <h1>{{.Title}}</h1>
+    {{if .Subtitle}}<p class="sub">{{.Subtitle}}</p>{{end}}
+  </div>
+  {{if .HeaderRight}}<div class="topright">{{.HeaderRight}}</div>{{end}}
+</div>
 <p class="zone" id="zone">All times shown in {{.Zone}}{{if .Service}} · scoped to {{.Service}} — <a href="/operations">show all services</a>{{end}}</p>
 <div class="content">
 {{template "content" .}}
@@ -806,6 +899,19 @@ const traceTemplate = `{{define "content"}}
   <td><b>{{range $i, $s := .Summary.Services}}{{if $i}}, {{end}}{{$s}}{{end}}</b><span class="dim">services</span></td>
 </tr>
 </table>
+
+{{if .Request}}
+<table class="reqstrip">
+<tr>
+  {{if .Request.Method}}<td><span class="k">method</span><b>{{.Request.Method}}</b></td>{{end}}
+  {{if .Request.Route}}<td><span class="k">route</span><b>{{.Request.Route}}</b></td>{{end}}
+  {{if .Request.Status}}<td><span class="k">status</span><b class="{{if ge .Request.Status 500}}bad{{else if ge .Request.Status 400}}warn{{else}}good{{end}}">{{.Request.Status}}</b></td>{{end}}
+  {{if .Request.ClientIP}}<td><span class="k">client</span><b>{{.Request.ClientIP}}</b></td>{{end}}
+  {{if .Request.UserAgent}}<td><span class="k">user agent</span><b>{{.Request.UserAgent}}</b></td>{{end}}
+  {{if .Request.Target}}<td><span class="k">target</span><b>{{.Request.Target}}</b></td>{{end}}
+</tr>
+</table>
+{{end}}
 
 {{.Waterfall.HTML}}
 
