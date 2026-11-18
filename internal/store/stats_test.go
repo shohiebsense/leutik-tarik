@@ -157,3 +157,35 @@ func TestMemoryTextSearchFindsAttributeValues(t *testing.T) {
 		t.Fatalf("trace-id search returned %d spans", len(got))
 	}
 }
+
+// Nobody remembers the exact route. A fragment must be enough, and in any case:
+// the stored form is otelgin's (/jam/customers/:customerId/period-pass/active).
+func TestMemoryRouteContains(t *testing.T) {
+	m := store.NewMemory()
+	at := time.Now()
+	_ = m.Insert(context.Background(), []model.Record{
+		{Span: model.Span{TraceID: "t1", SpanID: "s1", Kind: "server", ServiceName: "fare-membership",
+			HTTPRoute: "/jam/customers/:customerId/period-pass/active", StartTime: at}},
+		{Span: model.Span{TraceID: "t2", SpanID: "s2", Kind: "server", ServiceName: "fare-membership",
+			HTTPRoute: "/jam/period-pass/list", StartTime: at}},
+		{Span: model.Span{TraceID: "t3", SpanID: "s3", Kind: "server", ServiceName: "fare-membership",
+			HTTPRoute: "/abt/scans", StartTime: at}},
+	})
+
+	for _, term := range []string{"period-pass", "PERIOD-PASS"} {
+		got, err := m.ListOperations(context.Background(), store.Query{Route: term})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Errorf("route %q matched %d spans, want 2", term, len(got))
+		}
+	}
+	// A path parameter fragment works too, and only hits the route that has it.
+	if got, _ := m.ListOperations(context.Background(), store.Query{Route: ":customerId"}); len(got) != 1 {
+		t.Errorf("route :customerId matched %d spans, want 1", len(got))
+	}
+	if got, _ := m.ListOperations(context.Background(), store.Query{Route: "abt"}); len(got) != 1 {
+		t.Errorf("route abt matched %d spans, want 1", len(got))
+	}
+}

@@ -32,6 +32,9 @@ type Store interface {
 // the primary axis of every observability question (review M8).
 type Query struct {
 	Service string
+	// Route matches anywhere in the route, not the whole string: nobody
+	// remembers whether it was /jam/customers/:customerId/period-pass/active or
+	// .../period-pass/list, and the stored form carries otelgin's ":param".
 	Route   string
 	Method  string
 	Outcome string
@@ -104,7 +107,7 @@ func (m *Memory) ListOperations(_ context.Context, q Query) ([]model.Span, error
 		if q.Service != "" && s.ServiceName != q.Service {
 			continue
 		}
-		if q.Route != "" && s.HTTPRoute != q.Route {
+		if q.Route != "" && !strings.Contains(strings.ToLower(s.HTTPRoute), strings.ToLower(q.Route)) {
 			continue
 		}
 		if q.Method != "" && s.HTTPMethod != q.Method {

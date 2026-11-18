@@ -1388,7 +1388,7 @@ const operationsTemplate = `{{define "content"}}
     <summary>more filters</summary>
     <p>
       <input type="text" name="service" placeholder="service" value="{{.Query.Service}}">
-      <input type="text" name="route" placeholder="route" value="{{.Query.Route}}">
+      <input type="text" name="route" placeholder="route contains… e.g. period-pass" value="{{.Query.Route}}">
       <input type="text" name="method" placeholder="method" value="{{.Query.Method}}">
       <select name="outcome">
         <option value="">all outcomes</option>

@@ -123,7 +123,10 @@ func (c *ClickHouse) ListOperations(ctx context.Context, q Query) ([]model.Span,
 		args = append(args, q.Service)
 	}
 	if q.Route != "" {
-		where = append(where, "http_route = ?")
+		// Contains, case-insensitively: matching the whole route meant recalling
+		// otelgin's exact form (/jam/customers/:customerId/period-pass/active)
+		// before the filter would return anything.
+		where = append(where, "positionCaseInsensitive(http_route, ?) > 0")
 		args = append(args, q.Route)
 	}
 	if q.Method != "" {
