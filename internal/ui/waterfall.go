@@ -41,6 +41,9 @@ type wfTick struct {
 	X     float64
 	Label string
 	Major bool
+	// Last anchors the label to the left of its gridline so the final tick is not
+	// drawn past the SVG edge and clipped to "19…".
+	Last bool
 }
 
 const (
@@ -164,6 +167,7 @@ func ticks(total time.Duration, plot float64) []wfTick {
 			X:     wfLabelWidth + frac*plot,
 			Label: tickLabel(d),
 			Major: i == 0 || i == n,
+			Last:  i == n,
 		})
 	}
 	return out
@@ -221,7 +225,11 @@ func (wf waterfall) svg() template.HTML {
 
 	for _, t := range wf.Ticks {
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%d" stroke="#e3e3e3" stroke-width="1"/>`, t.X, t.X, wf.Height)
-		fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888">%s</text>`, t.X+2, 10, t.Label)
+		if t.Last {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888" text-anchor="end">%s</text>`, t.X-2, 10, t.Label)
+		} else {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888">%s</text>`, t.X+2, 10, t.Label)
+		}
 	}
 
 	for _, r := range wf.Rows {
