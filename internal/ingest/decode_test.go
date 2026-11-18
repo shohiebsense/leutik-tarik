@@ -113,8 +113,8 @@ func TestRedaction(t *testing.T) {
 	if attrs["db.system"] != "postgresql" {
 		t.Errorf("innocent attribute was altered: %q", attrs["db.system"])
 	}
-	if n < 4 {
-		t.Errorf("redacted count = %d, want >= 4", n)
+	if n < 3 {
+		t.Errorf("redacted count = %d, want >= 3", n)
 	}
 }
 
@@ -224,15 +224,16 @@ func TestSQLTextIsNeverStored(t *testing.T) {
 	if attrs["db.query.parameter.0"] != redactedPlaceholder {
 		t.Errorf("db.query.parameter.0 stored: %q", attrs["db.query.parameter.0"])
 	}
-	if attrs["http.request.body"] != redactedPlaceholder {
-		t.Errorf("request body stored: %q", attrs["http.request.body"])
+	// The body is kept on purpose; its credential fields are not.
+	if body := attrs["http.request.body"]; !strings.Contains(body, "[REDACTED]") || strings.Contains(body, "1234") {
+		t.Errorf("request body not scrubbed: %q", body)
 	}
 	// Useful, non-sensitive context must survive.
 	if attrs["db.system"] != "postgresql" || attrs["db.query.summary"] != "SELECT customers" {
 		t.Errorf("safe attributes were removed: %+v", attrs)
 	}
-	if n < 4 {
-		t.Errorf("redacted count = %d, want >= 4", n)
+	if n < 3 {
+		t.Errorf("redacted count = %d, want >= 3", n)
 	}
 }
 

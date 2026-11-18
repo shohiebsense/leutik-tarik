@@ -37,12 +37,6 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 		}
 
 		redacted := redact(r.attrs)
-		if body, ok := r.attrs["http.request.body"]; ok && body != "" {
-			if scrubbed, changed := scrubBody(body); changed {
-				r.attrs["http.request.body"] = scrubbed
-				redacted++
-			}
-		}
 		stats.redacted += redacted
 
 		statusCode := intOf(r.attrs, "http.response.status_code", "http.status_code")
@@ -296,6 +290,13 @@ const redactedPlaceholder = "[REDACTED]"
 // changed.
 func redact(attrs map[string]string) int {
 	n := 0
+	// A captured payload is kept, but the credentials inside it are not.
+	if body, ok := attrs["http.request.body"]; ok && body != "" {
+		if scrubbed, changed := scrubBody(body); changed {
+			attrs["http.request.body"] = scrubbed
+			n++
+		}
+	}
 	for k, v := range attrs {
 		if v == "" {
 			continue
