@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// entryPointsSQL is the rule ListOperations already applies in Go, expressed in
+// SQL: a root span that received work, not a poller tick.
+//
+// It is not cosmetic. Two ~1s background pollers (ClaimDueAbtTokens,
+// ScanUnitWorker.maybePurge) produce 881k root spans a day at full sampling,
+// against 6k real requests. Aggregating over all of them took 4.7s per page
+// load, and reported "73728 operations" for an hour that saw 600 requests.
+//
+// Applied inside the dedup subquery on purpose: it cuts the rows the LIMIT 1 BY
+// pass has to sort, which is where the time went.
+const entryPointsSQL = `parent_span_id = ''
+	AND kind != 'client' AND kind != 'producer'
+	AND (kind = 'server' OR http_route != '')`
+
 // ServiceStats aggregates the RED view per service.
 //
 // The window is applied in the subquery so duplicates are collapsed (LIMIT 1 BY)
@@ -20,8 +34,9 @@ func (c *ClickHouse) ServiceStats(ctx context.Context, from, to time.Time) ([]Se
 			quantile(0.95)(duration_ms) AS p95_ms,
 			max(start_time) AS last_seen,
 			uniqExact(http_route) AS routes
-		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ? LIMIT 1 BY trace_id, span_id)
-		WHERE parent_span_id = ''
+		FROM (SELECT trace_id, span_id, service_name, start_time, outcome, duration_ms, http_route
+			FROM spans WHERE start_time >= ? AND start_time <= ? AND ` + entryPointsSQL + `
+			LIMIT 1 BY trace_id, span_id)
 		GROUP BY service_name
 		ORDER BY errors DESC, spans DESC`
 	rows, err := c.queryAggregate(ctx, sql, []any{chTime(from), chTime(to)})
@@ -64,7 +79,9 @@ func (c *ClickHouse) ErrorGroups(ctx context.Context, from, to time.Time, limit 
 	sql := fmt.Sprintf(`SELECT service_name, http_route, outcome, error_type, status_message,
 			count() AS n, uniqExact(trace_id) AS traces,
 			min(start_time) AS first_seen, max(start_time) AS last_seen
-		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ?
+		FROM (SELECT trace_id, span_id, service_name, http_route, outcome, error_type, status_message, start_time
+		      FROM spans WHERE start_time >= ? AND start_time <= ?
+		      AND `+entryPointsSQL+`
 		      AND outcome IN ('error', 'server_error', 'client_error')
 		      LIMIT 1 BY trace_id, span_id)
 		GROUP BY service_name, http_route, outcome, error_type, status_message
@@ -130,8 +147,9 @@ func (c *ClickHouse) EndpointStats(ctx context.Context, from, to time.Time, limi
 			quantile(0.95)(duration_ms) AS p95_ms,
 			avg(duration_ms) AS avg_ms,
 			sum(duration_ms) AS total_ms
-		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ? LIMIT 1 BY trace_id, span_id)
-		WHERE parent_span_id = '' AND http_route != ''
+		FROM (SELECT trace_id, span_id, service_name, http_route, http_method, outcome, duration_ms
+			FROM spans WHERE start_time >= ? AND start_time <= ? AND parent_span_id = '' AND http_route != ''
+			LIMIT 1 BY trace_id, span_id)
 		GROUP BY service_name, http_route, http_method
 		ORDER BY total_ms DESC
 		LIMIT %d`, limit)
@@ -176,9 +194,11 @@ func (c *ClickHouse) HTTPFailures(ctx context.Context, service string, from, to 
 	// so the subquery's two come first and the service filter's third, if any.
 	sql := fmt.Sprintf(`SELECT service_name, http_route, http_method, status_code,
 			count() AS n, max(start_time) AS last_seen, any(trace_id) AS example
-		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ?
+		FROM (SELECT trace_id, span_id, service_name, http_route, http_method, status_code, start_time
+		      FROM spans WHERE start_time >= ? AND start_time <= ?
+		      AND parent_span_id = '' AND status_code >= 400 AND http_route != ''
 		      LIMIT 1 BY trace_id, span_id)
-		WHERE status_code >= 400 AND http_route != '' %s
+		WHERE 1 %s
 		GROUP BY service_name, http_route, http_method, status_code
 		ORDER BY n DESC
 		LIMIT %d`,
