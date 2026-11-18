@@ -41,6 +41,11 @@ type Query struct {
 	// stable while new spans arrive).
 	Cursor time.Time
 
+	// IncludeBackground also lists root spans that are not request entry points
+	// (cron jobs, workers). Off by default: instrumented workers produce a root
+	// span every tick, and a list of those buries the requests it exists to show.
+	IncludeBackground bool
+
 	Limit int
 }
 
@@ -84,6 +89,10 @@ func (m *Memory) ListOperations(_ context.Context, q Query) ([]model.Span, error
 		// Same rule as the ClickHouse query: a client span without a parent is a
 		// background dependency call, not an operation.
 		if s.Kind == "client" || s.Kind == "producer" {
+			continue
+		}
+		// Entry points only, unless background jobs were asked for.
+		if !q.IncludeBackground && s.Kind != "server" && s.HTTPRoute == "" {
 			continue
 		}
 		if q.Service != "" && s.ServiceName != q.Service {

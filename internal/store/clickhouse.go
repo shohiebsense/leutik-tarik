@@ -113,6 +113,11 @@ func (c *ClickHouse) ListOperations(ctx context.Context, q Query) ([]model.Span,
 	// parent (a background Redis call, a scheduled DB job) is a dependency that
 	// happens to be a root - listing it as an operation buries the real one.
 	where = append(where, "parent_span_id = ''", "kind != 'client'", "kind != 'producer'")
+	if !q.IncludeBackground {
+		// Entry points only: an instrumented worker emits a root span every tick,
+		// and those bury the requests this list exists to show.
+		where = append(where, "(kind = 'server' OR http_route != '')")
+	}
 	if q.Service != "" {
 		where = append(where, "service_name = ?")
 		args = append(args, q.Service)

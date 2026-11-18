@@ -49,7 +49,9 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		Route:   r.URL.Query().Get("route"),
 		Method:  r.URL.Query().Get("method"),
 		Outcome: r.URL.Query().Get("outcome"),
-		Limit:   store.MaxLimit,
+		// Background jobs are opt-in: they are useful, but they are not requests.
+		IncludeBackground: r.URL.Query().Get("all") == "1",
+		Limit:             store.MaxLimit,
 	}
 	// Time range: default to the last 24h so the page never scans everything.
 	to := u.clock()
@@ -695,6 +697,7 @@ const operationsTemplate = `{{define "content"}}
   </select>
   <label>from <input type="text" name="from" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{.From}}"></label>
   <label>to <input type="text" name="to" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{.To}}"></label>
+  <label><input type="checkbox" name="all" value="1" {{if .Query.IncludeBackground}}checked{{end}}> include background jobs</label>
   <button type="submit">Search</button>
 </form>
 <table>

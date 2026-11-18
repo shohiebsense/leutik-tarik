@@ -98,3 +98,35 @@ func TestOperationsExcludeClientRoots(t *testing.T) {
 		t.Fatalf("operations = %d (want only the server span): %+v", len(got), got)
 	}
 }
+
+// Instrumenting workers means every cron tick is a root span. The operations
+// list must show requests by default, or 1000 worker spans bury the 3 requests.
+func TestOperationsDefaultToEntryPoints(t *testing.T) {
+	s := store.NewMemory()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	req := model.Record{Span: model.Span{
+		TraceID: "t1", SpanID: "s1", Kind: "server", ServiceName: "svc",
+		HTTPRoute: "/abt/scans", HTTPMethod: "POST", StatusCode: 200,
+		Outcome: model.OutcomeSuccess, StartTime: now, EndTime: now.Add(time.Millisecond), Duration: time.Millisecond,
+	}}
+	worker := model.Record{Span: model.Span{
+		TraceID: "t2", SpanID: "s2", Kind: "internal", ServiceName: "svc",
+		Name: "ScanUnitWorker.maybePurge", Outcome: model.OutcomeOK,
+		StartTime: now, EndTime: now.Add(time.Microsecond), Duration: time.Microsecond,
+	}}
+	if err := s.Insert(ctx, []model.Record{req, worker}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.ListOperations(ctx, store.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute)})
+	if len(got) != 1 || got[0].SpanID != "s1" {
+		t.Fatalf("default list = %d rows (want only the request)", len(got))
+	}
+
+	all, _ := s.ListOperations(ctx, store.Query{From: now.Add(-time.Minute), To: now.Add(time.Minute), IncludeBackground: true})
+	if len(all) != 2 {
+		t.Fatalf("background list = %d rows, want 2", len(all))
+	}
+}
