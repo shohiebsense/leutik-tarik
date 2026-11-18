@@ -86,10 +86,31 @@ func (u UI) clock() time.Time {
 	return time.Now()
 }
 
-// refreshSeconds is how often a live operations page re-asks for its window.
-// One minute: short enough that "now" means now, long enough that reading the
-// list is not interrupted by a reload.
+// refreshSeconds is how often a browser without JavaScript re-asks for a live
+// window. Kept longer than livePollSeconds because that path is a full document
+// reload, and reloading every 15s would make the page unreadable.
 const refreshSeconds = 60
+
+// livePollSeconds is how often a live window updates in place when JavaScript
+// is available. Short, because an in-place swap costs the reader nothing.
+const livePollSeconds = 15
+
+// defaultWindow is the rolling window a bare /operations asks for.
+const defaultWindow = 15 * time.Minute
+
+// lastWindow parses a rolling window length ("15m", "1h"). It refuses anything
+// zero, negative or longer than a week: a guessing typo should fall back to the
+// default window, not scan the whole store.
+func lastWindow(v string) (time.Duration, bool) {
+	if v == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 || d > 7*24*time.Hour {
+		return 0, false
+	}
+	return d, true
+}
 
 // windowURL is the same page with the filters kept and from/to replaced (both
 // empty removes them, which is what turns a frozen window back into a live
@@ -107,6 +128,25 @@ func windowURL(basePath string, in url.Values, from, to string) string {
 	}
 	if to != "" {
 		out.Set("to", to)
+	}
+	if len(out) == 0 {
+		return basePath
+	}
+	return basePath + "?" + out.Encode()
+}
+
+// liveURL is the URL the page polls to refresh itself: same filters, rolling
+// window, never absolute times (those would freeze it on first poll).
+func liveURL(basePath string, in url.Values, last string) string {
+	out := url.Values{}
+	for k, v := range in {
+		if k == "from" || k == "to" {
+			continue
+		}
+		out[k] = v
+	}
+	if last != "" {
+		out.Set("last", last)
 	}
 	if len(out) == 0 {
 		return basePath
@@ -139,13 +179,21 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		IncludeBackground: r.URL.Query().Get("all") == "1",
 		Limit:             store.MaxLimit,
 	}
-	// Time range: a 15-minute window by default, because this is a "what is
-	// happening now" list, not an archive. A range given in the URL stays exactly
-	// where it was put; only the default window follows the clock (and the page
-	// refreshes itself, see refreshSeconds below), so paging through an incident
-	// is never yanked forward.
+	// Time range. Two ways to say it, and the difference is deliberate:
+	//
+	//	last=15m   a rolling window: it follows the clock, and the page updates
+	//           itself in place (see livePollSeconds).
+	//	from=..&to=..  a frozen window: an investigation, pinned to exact times.
+	//
+	// The default is rolling, because "what is happening now" is the question
+	// this list exists to answer. Absolute times win when both are present, so a
+	// link to an incident never drifts under the reader.
 	to := u.clock()
-	from := to.Add(-15 * time.Minute)
+	span, ok := lastWindow(r.URL.Query().Get("last"))
+	if !ok {
+		span = defaultWindow
+	}
+	from := to.Add(-span)
 	live := true
 	if t, ok := parseTime(r.URL.Query().Get("from")); ok {
 		from, live = t, false
@@ -153,17 +201,21 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	if t, ok := parseTime(r.URL.Query().Get("to")); ok {
 		to, live = t, false
 	}
+	last := policy.HumanDuration(span) // "15m", not "15m0s"
+	if !live {
+		// A frozen window still needs a length for its labels.
+		last = ""
+	}
 	q.From, q.To = from, to
 	fromStr, toStr := inDisplay(from).Format(inputTimeLayout), inDisplay(to).Format(inputTimeLayout)
 
-	// A live window has to advance without the viewer pressing reload, and the
-	// browser runs no JavaScript (ADR 0002), so the server-rendered answer is a
-	// meta refresh: the page re-asks for the last 15 minutes every minute. The
-	// trade-off is a full document reload (scroll position resets), which is why
-	// a pinned window never refreshes and the live line offers a freeze link.
-	refresh := 0
+	// A live window also has to keep moving while it is open. Browsers without
+	// JavaScript get a document-level refresh inside <noscript>; everyone else
+	// gets an in-place update that swaps only the results, so the page does not
+	// reload, the scroll position survives and nothing flashes.
+	refresh, poll := 0, 0
 	if live {
-		refresh = refreshSeconds
+		refresh, poll = refreshSeconds, livePollSeconds
 	}
 
 	// Every service in the window: once more than one service reports, a flat
@@ -206,11 +258,13 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"WindowLabel": policy.HumanDuration(to.Sub(from)),
 
 		"Live":           live,
+		"Last":           last,
 		"RefreshSeconds": refresh,
+		"PollSeconds":    poll,
+		"LiveURL":        liveURL(basePath, r.URL.Query(), last),
 		"TotalSpans":     len(spans),
 		"TotalErrors":    totalErrors,
 		"PinnedURL":      windowURL(basePath, r.URL.Query(), fromStr, toStr),
-		"LiveURL":        windowURL(basePath, r.URL.Query(), "", ""),
 	})
 }
 
@@ -723,7 +777,7 @@ const pageShell = `{{define "page"}}<!doctype html>
 <title>{{.Title}} — leutik-tarik</title>
 {{/* A live window advances only by re-asking the server, and this UI runs no
      JavaScript (ADR 0002), so the refresh is the document-level one. */}}
-{{if .RefreshSeconds}}<meta http-equiv="refresh" content="{{.RefreshSeconds}}">{{end}}
+{{if .RefreshSeconds}}<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>{{end}}
 <style>
 html,body{margin:0;padding:0}
 .brandbar{display:flex;align-items:center;gap:1.4rem;flex-wrap:wrap;border-bottom:1px solid #ececec;padding-bottom:.55rem;margin-bottom:.9rem}
@@ -794,6 +848,11 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .topright .big{display:block;font-size:1rem;font-weight:600}
 .topright .tz{display:block;font-size:.75rem;color:#777}
 @media (max-width:700px){.topright{text-align:left}}
+/* The live region swaps in place, so the only motion is a brief fade: a jump
+   cut would read as "did it change?", and a full reload would lose the scroll. */
+#live{transition:opacity .14s ease}
+#live.livefade{opacity:.45}
+@media (prefers-reduced-motion:reduce){#live{transition:none}}
 /* The tree glyphs must touch between rows: any vertical padding or leading above
    1 leaves a gap and the bars read as disconnected marks. */
 table td.tree{padding-top:.15rem;padding-bottom:.15rem}
@@ -864,6 +923,40 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
 {{template "content" .}}
 </div>
 </div>
+<script>
+/* In-place update of the live region. The page is still server-rendered: this
+   fetches the same URL, takes the #live section out of the response and swaps
+   only that, so scroll position, focus in the filter form and the rest of the
+   document are untouched. Nothing polls while the tab is hidden. */
+(function () {
+  var el = document.getElementById('live');
+  if (!el || !el.dataset.liveUrl || !window.fetch || !window.DOMParser) return;
+  var ms = (parseInt(el.dataset.liveInterval, 10) || 15) * 1000;
+  var busy = false, pending = false;
+
+  function swap() {
+    if (busy) { pending = true; return; }
+    busy = true;
+    fetch(el.dataset.liveUrl, { credentials: 'same-origin', headers: { 'X-Live': '1' } })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (html) {
+        var next = new DOMParser().parseFromString(html, 'text/html').getElementById('live');
+        if (!next) return;
+        el.classList.add('livefade');
+        setTimeout(function () {
+          el.innerHTML = next.innerHTML;
+          if (next.dataset.liveInterval) el.dataset.liveInterval = next.dataset.liveInterval;
+          el.classList.remove('livefade');
+        }, 140);
+      })
+      .catch(function () { /* keep what is on screen; the next tick retries */ })
+      .then(function () { busy = false; if (pending) { pending = false; swap(); } });
+  }
+
+  setInterval(function () { if (!document.hidden) swap(); }, ms);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) swap(); });
+})();
+</script>
 </body>
 </html>{{end}}`
 
@@ -1201,13 +1294,21 @@ const operationsTemplate = `{{define "content"}}
     <option value="">all outcomes</option>
     {{range .Outcomes}}<option value="{{.}}" {{if eq . $.Query.Outcome}}selected{{end}}>{{.}}</option>{{end}}
   </select>
-  <label>from <input type="text" name="from" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{.From}}"></label>
-  <label>to <input type="text" name="to" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{.To}}"></label>
+  {{/* Empty while live: the form used to post its own preview of the window,
+       which quietly froze the page on every search. Typing a range is still how
+       you pin one - that is the only thing that should stop the clock. */}}
+  <input type="hidden" name="last" value="{{.Last}}">
+  <label>from <input type="text" name="from" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{if not .Live}}{{.From}}{{end}}"></label>
+  <label>to <input type="text" name="to" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{if not .Live}}{{.To}}{{end}}"></label>
   <label><input type="checkbox" name="all" value="1" {{if .Query.IncludeBackground}}checked{{end}}> include background jobs</label>
   <button type="submit">Search</button>
 </form>
+
+{{/* Everything the clock moves lives in here and is swapped as one unit. */}}
+<section id="live"
+  {{if .Live}}data-live-url="{{.LiveURL}}" data-live-interval="{{.PollSeconds}}"{{end}}>
 <p class="dim">{{.WindowLabel}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}
-{{if .Live}} · <b>live</b>, refreshes every {{.RefreshSeconds}}s — <a href="{{.PinnedURL}}">freeze this window</a>{{else}} · frozen — <a href="{{.LiveURL}}">back to live</a>{{end}}</p>
+{{if .Live}} · <b>live</b>{{if .PollSeconds}}, updates every {{.PollSeconds}}s{{end}} — <a href="{{.PinnedURL}}">freeze this window</a>{{else}} · frozen — <a href="{{.LiveURL}}">back to live</a>{{end}}</p>
 <table>
 <thead><tr><th>Time</th><th>Request</th><th>Duration</th><th>Outcome</th></tr></thead>
 <tbody>
@@ -1229,6 +1330,7 @@ const operationsTemplate = `{{define "content"}}
 {{end}}
 </tbody>
 </table>
+</section>
 {{end}}`
 
 const traceTemplate = `{{define "content"}}

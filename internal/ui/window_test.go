@@ -29,8 +29,13 @@ func TestOperationsDefaultWindowIsLive(t *testing.T) {
 	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
 	body := livePage(t, "/operations", now)
 
-	if !strings.Contains(body, `<meta http-equiv="refresh" content="60">`) {
-		t.Error("live page carries no auto-refresh")
+	// No-JS browsers still get a document-level refresh, but only inside
+	// <noscript>: everyone else updates in place.
+	if !strings.Contains(body, `<noscript><meta http-equiv="refresh" content="60"></noscript>`) {
+		t.Error("live page carries no noscript refresh fallback")
+	}
+	if !strings.Contains(body, `data-live-url=`) || !strings.Contains(body, `data-live-interval="15"`) {
+		t.Error("live page does not expose a poll target")
 	}
 	if !strings.Contains(body, `15m window`) {
 		t.Errorf("want a 15m window in the footer, got: %s", footerLine(body))
@@ -62,8 +67,8 @@ func TestOperationsPinnedWindowDoesNotRefresh(t *testing.T) {
 	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
 	body := livePage(t, "/operations?from=2026-11-18+08%3A00&to=2026-11-18+08%3A30", now)
 
-	if strings.Contains(body, `http-equiv="refresh"`) {
-		t.Error("pinned window should not auto-refresh")
+	if strings.Contains(body, `http-equiv="refresh"`) || strings.Contains(body, `data-live-url=`) {
+		t.Error("pinned window should not update itself")
 	}
 	if !strings.Contains(body, `frozen`) || !strings.Contains(body, `back to live`) {
 		t.Errorf("pinned footer should say it is frozen: %s", footerLine(body))
@@ -116,5 +121,41 @@ func TestWindowURL(t *testing.T) {
 	}
 	if got := windowURL("/operations", map[string][]string{"route": {"/v1/x"}}, "", ""); got != "/operations?route=%2Fv1%2Fx" {
 		t.Errorf("clear-only window = %q", got)
+	}
+}
+
+// The filter form used to post its own preview of from/to, which froze the page
+// on every search. Empty while live is what keeps it rolling.
+func TestLiveFormDoesNotPinTheWindow(t *testing.T) {
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations?service=&route=&method=&outcome=", now)
+
+	if strings.Contains(body, `placeholder="YYYY-MM-DD HH:MM" value="20`) {
+		t.Error("live form prefilled from/to, which would pin the window on submit")
+	}
+	if !strings.Contains(body, `name="last" value="15m"`) {
+		t.Error("form does not carry the rolling window length")
+	}
+}
+
+// A pinned window still prefills, so the reader can see what they pinned.
+func TestPinnedFormPrefills(t *testing.T) {
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations?from=2026-11-18+08%3A00&to=2026-11-18+08%3A30", now)
+	if !strings.Contains(body, `value="2026-11-18 08:00"`) {
+		t.Error("pinned form should show the pinned range")
+	}
+}
+
+func TestLastWindow(t *testing.T) {
+	for _, bad := range []string{"", "0", "-5m", "15", "30d", "1w"} {
+		if _, ok := lastWindow(bad); ok {
+			t.Errorf("lastWindow(%q) accepted", bad)
+		}
+	}
+	for _, good := range []string{"1m", "15m", "90s", "1h", "24h"} {
+		if _, ok := lastWindow(good); !ok {
+			t.Errorf("lastWindow(%q) rejected", good)
+		}
 	}
 }

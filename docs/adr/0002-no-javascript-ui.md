@@ -20,13 +20,28 @@ each page is directly deployable as one Go service.
 - Where a visual interaction cannot be delivered without JS, implement the
   clearest server-rendered alternative and document the trade-off.
 
-## Deviation: the operations list refreshes itself
+## Deviation: the operations list updates itself in place
 
-`/operations` defaults to the last 15 minutes and re-requests that window every
-60 seconds. Without JavaScript the only way to advance a window is to re-ask the
-server, so this uses a document-level refresh (`<meta http-equiv="refresh">`).
-The trade-off is a full reload: the scroll position resets and the page repaints
-every minute. Two guards keep it from fighting the reader: a window pinned with
-`from`/`to` never refreshes, and a live page offers a "freeze this window" link
-that pins exactly what is on screen. An in-place update would need a script, and
-that is the thing this ADR exists to avoid.
+`/operations` defaults to a rolling window (`last=15m`) and keeps it current
+while the page is open. The first attempt used a document-level refresh
+(`<meta http-equiv="refresh">`), which reloads the whole page every minute: it
+loses the scroll position, flashes, and interrupts anyone typing in the filter
+form. That was rejected as "a hacky browser reload" by the operator.
+
+What runs now is a single inline script with one job: fetch the same URL, parse
+the response, and replace the contents of the `#live` section. Consequences of
+keeping the swap narrow:
+
+- the page is still server-rendered — the script never builds markup, it moves
+  the server's own markup into place;
+- scroll position, the filter form, and everything outside `#live` are untouched;
+- the swap is a 140 ms opacity fade (skipped under `prefers-reduced-motion`)
+  rather than a jump cut;
+- nothing polls while the tab is hidden;
+- a failed fetch leaves the previous content on screen and retries next tick;
+- with JavaScript disabled the page still works exactly as before, and gets the
+  document refresh inside `<noscript>` as the fallback.
+
+This is the narrowest deviation we could find that meets the requirement. Any
+future client-side behaviour should be held to the same rule: swapping what the
+server already rendered, never constructing a view in the browser.
