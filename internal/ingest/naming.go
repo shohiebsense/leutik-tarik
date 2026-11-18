@@ -22,6 +22,22 @@ func isNoise(name string) bool {
 	return noiseSpans[strings.ToLower(strings.TrimSpace(name))]
 }
 
+// isPrepareNoise reports a pgx Prepare span. pgx prepares a statement lazily
+// inside the query call, so otelpgx nests a prepare span under the query span
+// with the same SQL and the same span name (both become "SELECT"), which reads
+// as a duplicate row. It only happens on a cold statement cache, i.e. right
+// after a restart, which is why the same endpoint looks doubled some minutes
+// and normal others.
+//
+// Dropping it loses no latency: the prepare time is inside the query span's
+// duration, so the waterfall still shows the whole wait. Identity is the
+// attribute otelpgx sets only on prepare spans, not the span name, because the
+// name is the bare verb and other instrumentation would match it too.
+func isPrepareNoise(attrs map[string]string) bool {
+	_, ok := attrs["pgx.prepare_stmt.name"]
+	return ok
+}
+
 // genericDBNames are what SQL instrumentation calls a span when it has nothing
 // better: the bare verb. A trace full of "SELECT" tells you nothing about which
 // query ran.

@@ -31,7 +31,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 
 		// Drop instrumentation-internal spans before anything else: they would
 		// otherwise occupy a row in every trace that touches the database.
-		if isNoise(r.name) {
+		if isNoise(r.name) || isPrepareNoise(r.attrs) {
 			stats.droppedSpans++
 			continue
 		}

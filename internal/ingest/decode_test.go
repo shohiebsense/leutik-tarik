@@ -304,6 +304,32 @@ func TestPoolSpansDropped(t *testing.T) {
 	}
 }
 
+// pgx prepares a statement lazily inside the query call, so otelpgx nests a
+// prepare span under the query span with the same SQL and the same name. Both
+// were stored as "SELECT customers" and read as a duplicate row.
+func TestPrepareSpansDropped(t *testing.T) {
+	raw := []rawSpan{
+		{resource: map[string]string{"service.name": "svc"}, name: "SELECT", traceID: "aa", spanID: "q",
+			attrs: map[string]string{
+				"db.query.text":     "SELECT * FROM customers WHERE id = $1",
+				"pgx.rows_affected": "1",
+			}},
+		{resource: map[string]string{"service.name": "svc"}, name: "SELECT", traceID: "aa", spanID: "p", parentSpanID: "q",
+			attrs: map[string]string{
+				"db.query.text": "SELECT * FROM customers WHERE id = $1",
+				// The only marker that separates a prepare span from the query it sits in.
+				"pgx.prepare_stmt.name": "stmtcache_281f3b7404",
+			}},
+	}
+	records, stats := normalize(raw, time.Now(), nil)
+	if len(records) != 1 || records[0].Span.SpanID != "q" {
+		t.Fatalf("want only the query span stored, got %d records", len(records))
+	}
+	if stats.droppedSpans != 1 {
+		t.Errorf("dropped = %d, want 1", stats.droppedSpans)
+	}
+}
+
 // "SELECT" tells a reader nothing; the statement's table does.
 func TestDescriptiveDBNames(t *testing.T) {
 	cases := []struct{ name, text, want string }{
