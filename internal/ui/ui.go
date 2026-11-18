@@ -191,6 +191,7 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 		Target:    root.Attributes["http.target"],
 		Status:    root.StatusCode,
 		ClientIP:  root.Attributes["http.client_ip"],
+		Identity:  root.Attributes["enduser.pseudo.id"],
 		UserAgent: root.Attributes["user_agent.original"],
 		Service:   root.ServiceName,
 	}
@@ -202,6 +203,8 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 
 // traceRequest is the request metadata shown above the waterfall.
 type traceRequest struct {
+	// Identity is the masked account this request was about (enduser.pseudo.id).
+	Identity  string
 	Method    string
 	Route     string
 	Target    string
@@ -906,6 +909,7 @@ const traceTemplate = `{{define "content"}}
   {{if .Request.Method}}<td><span class="k">method</span><b>{{.Request.Method}}</b></td>{{end}}
   {{if .Request.Route}}<td><span class="k">route</span><b>{{.Request.Route}}</b></td>{{end}}
   {{if .Request.Status}}<td><span class="k">status</span><b class="{{if ge .Request.Status 500}}bad{{else if ge .Request.Status 400}}warn{{else}}good{{end}}">{{.Request.Status}}</b></td>{{end}}
+  {{if .Request.Identity}}<td><span class="k">account</span><b>{{.Request.Identity}}</b></td>{{end}}
   {{if .Request.ClientIP}}<td><span class="k">client</span><b>{{.Request.ClientIP}}</b></td>{{end}}
   {{if .Request.UserAgent}}<td><span class="k">user agent</span><b>{{.Request.UserAgent}}</b></td>{{end}}
   {{if .Request.Target}}<td><span class="k">target</span><b>{{.Request.Target}}</b></td>{{end}}
