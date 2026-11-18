@@ -48,6 +48,8 @@ type Stats interface {
 	// EndpointStats ranks endpoints by total time: the "what do I tune first"
 	// list. Ordered by Total descending.
 	EndpointStats(ctx context.Context, from, to time.Time, limit int) ([]EndpointStat, error)
+	// HTTPFailures lists failed responses, split 4xx/5xx by Class.
+	HTTPFailures(ctx context.Context, service string, from, to time.Time, limit int) ([]HTTPFailure, error)
 }
 
 // ProfileMeta is one stored profile artefact.
@@ -117,4 +119,19 @@ type FunctionRanking struct {
 	Functions []TopFunction
 	Unit      string
 	Total     int64
+}
+
+// HTTPFailure is one failed response, grouped by route and status code, so the
+// 4xx and 5xx classes can be read separately: a bad request is the client's
+// problem, a 5xx is ours.
+type HTTPFailure struct {
+	Service    string
+	Route      string
+	Method     string
+	StatusCode int
+	Class      string // "4xx" or "5xx"
+	Count      int64
+	LastSeen   time.Time
+	// ExampleTrace points at one occurrence to open.
+	ExampleTrace string
 }

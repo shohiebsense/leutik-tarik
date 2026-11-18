@@ -125,9 +125,11 @@ func TestOutcome(t *testing.T) {
 		{200, 0, "success"},
 		{404, 0, "client_error"},
 		{500, 0, "server_error"},
-		{500, 2, "error"}, // OTLP status ERROR wins
-		{0, 2, "error"},   // non-HTTP error span
-		{0, 0, "unknown"}, // nothing to classify — say so, don't guess
+		{500, 2, "server_error"}, // HTTP class is more specific than OTLP error
+		{0, 2, "error"},          // non-HTTP error span keeps the generic error
+		{0, 0, "ok"},             // OTLP UNSET: completed, nothing reported an error
+		{0, 1, "success"},        // explicit OK is a reported success
+		{503, 0, "server_error"}, // 5xx is a bad request's opposite: the server failed
 	}
 	for _, c := range cases {
 		if got := outcome(c.status, c.otlp); got != c.want {

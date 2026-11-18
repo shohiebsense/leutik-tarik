@@ -324,6 +324,7 @@ var (
 	operationsView    = template.Must(template.Must(pageBase.Clone()).Parse(operationsTemplate))
 	servicesView      = template.Must(template.Must(pageBase.Clone()).Parse(servicesTemplate))
 	incidentsView     = template.Must(template.Must(pageBase.Clone()).Parse(incidentsTemplate))
+	serviceDetailView = template.Must(template.Must(pageBase.Clone()).Parse(serviceDetailTemplate))
 	profilesView      = template.Must(template.Must(pageBase.Clone()).Parse(profilesTemplate))
 	profileDetailView = template.Must(template.Must(pageBase.Clone()).Parse(profileDetailTemplate))
 	traceView         = template.Must(template.Must(pageBase.Clone()).Parse(traceTemplate))
@@ -379,6 +380,9 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
+.code{display:inline-block;padding:0 .35rem;border-radius:3px;background:#eef;color:#234;font-variant-numeric:tabular-nums}
+.code.bad{background:#fdecef;color:#b00020}
+.code.warn{background:#fdf6e3;color:#8a5b00}
 .spanblock{border-left:2px solid #e6e6e6;margin:.25rem 0 .25rem 0;padding:.15rem 0 .15rem .6rem}
 .spanblock.root{border-left:2px solid #bbb}
 .ind{display:inline-block}
@@ -499,7 +503,7 @@ const servicesTemplate = `{{define "content"}}
 <tbody>
 {{range .Rows}}
 <tr>
-  <td><a href="/operations?service={{.Service}}">{{.Service}}</a></td>
+  <td><a href="/services/{{.Service}}">{{.Service}}</a></td>
   <td>{{.Spans}}</td>
   <td class="{{if gt .Errors 0}}bad{{end}}">{{.Errors}}</td>
   <td>
@@ -546,6 +550,76 @@ const servicesTemplate = `{{define "content"}}
 {{end}}`
 
 const servicesTemplateExtra = `{{define "_unused"}}{{end}}`
+
+const serviceDetailTemplate = `{{define "content"}}
+<p class="dim">{{human .Window}} window · {{.Stat.Spans}} operations · {{.Stat.Errors}} failed · p50 {{dur .Stat.P50}} · p95 {{dur .Stat.P95}} · {{.Stat.Routes}} routes</p>
+
+<h2>Worth checking</h2>
+{{if or .Bad5 .Bad4}}
+<p class="warn">This service has failed responses in the window: {{len .Bad5}} 5xx fingerprints, {{len .Bad4}} 4xx fingerprints.</p>
+{{else}}
+<p class="dim">No failed responses in this window.</p>
+{{end}}
+
+<h2>Server errors (5xx) <span class="dim">— our side failed</span></h2>
+<table>
+<thead><tr><th>Count</th><th>Request</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+<tbody>
+{{range .Bad5}}
+<tr>
+  <td class="bad"><b>{{.Count}}</b></td>
+  <td><b>{{.Method}}</b> {{.Route}}</td>
+  <td><span class="code bad">{{.StatusCode}}</span></td>
+  <td class="dim">{{ts .LastSeen}}</td>
+  <td><a href="/traces/{{.ExampleTrace}}">example</a></td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="dim">None.</td></tr>
+{{end}}
+</tbody>
+</table>
+
+<h2>Bad requests (4xx) <span class="dim">— the caller's side failed</span></h2>
+<table>
+<thead><tr><th>Count</th><th>Request</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+<tbody>
+{{range .Bad4}}
+<tr>
+  <td class="warn"><b>{{.Count}}</b></td>
+  <td><b>{{.Method}}</b> {{.Route}}</td>
+  <td><span class="code warn">{{.StatusCode}}</span></td>
+  <td class="dim">{{ts .LastSeen}}</td>
+  <td><a href="/traces/{{.ExampleTrace}}">example</a></td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="dim">None.</td></tr>
+{{end}}
+</tbody>
+</table>
+
+<h2>Endpoints by total time</h2>
+<table>
+<thead><tr><th>#</th><th>Request</th><th>Requests</th><th>Total</th><th>Median</th><th>p95</th><th>Errors</th><th>Verdict</th></tr></thead>
+<tbody>
+{{range $i, $e := .Endpoints}}
+<tr>
+  <td class="dim">{{inc $i}}</td>
+  <td><b>{{$e.Method}}</b> {{$e.Route}}</td>
+  <td>{{$e.Count}}</td>
+  <td><b>{{dur $e.Total}}</b></td>
+  <td>{{dur $e.P50}}</td>
+  <td>{{dur $e.P95}}</td>
+  <td class="{{if gt $e.Errors 0}}bad{{end}}">{{$e.Errors}}</td>
+  <td class="{{if eq (verdictState $e $.Judgements) "slow"}}warn{{else if eq (verdictState $e $.Judgements) "ok"}}dim{{end}}">{{verdictLabel $e $.Judgements}}</td>
+</tr>
+{{else}}
+<tr><td colspan="8" class="dim">No HTTP endpoints in this window.</td></tr>
+{{end}}
+</tbody>
+</table>
+
+<p><a href="/services">← all services</a> · <a href="/operations?service={{.Service}}">operations for this service</a></p>
+{{end}}`
 
 const incidentsTemplate = `{{define "content"}}
 <p class="dim">{{human .Window}} window · {{.Total}} failed operations across {{len .Groups}} fingerprints</p>
@@ -624,20 +698,21 @@ const operationsTemplate = `{{define "content"}}
   <button type="submit">Search</button>
 </form>
 <table>
-<thead><tr><th>Time</th><th>Service</th><th>Route</th><th>Status</th><th>Duration</th><th>Outcome</th><th>Trace</th></tr></thead>
+<thead><tr><th>Time</th><th>Request</th><th>Duration</th><th>Outcome</th><th>Trace</th></tr></thead>
 <tbody>
 {{range .Spans}}
 <tr>
   <td>{{ts .StartTime}}</td>
-  <td>{{.ServiceName}}</td>
-  <td>{{if .HTTPMethod}}<b>{{.HTTPMethod}}</b> {{end}}{{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}</td>
-  <td>{{if .StatusCode}}{{.StatusCode}}{{else}}—{{end}}</td>
+  <td>
+    {{if .HTTPMethod}}<b>{{.HTTPMethod}}</b>{{end}} {{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}
+    {{if .StatusCode}}<span class="code {{if ge .StatusCode 500}}bad{{else if ge .StatusCode 400}}warn{{end}}">{{.StatusCode}}</span>{{end}}
+  </td>
   <td>{{dur .Duration}}</td>
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{end}}">{{.Outcome}}</td>
   <td><a href="/traces/{{.TraceID}}">trace</a></td>
 </tr>
 {{else}}
-<tr><td colspan="7" class="dim">No operations in this window.</td></tr>
+<tr><td colspan="5" class="dim">No operations in this window.</td></tr>
 {{end}}
 </tbody>
 </table>

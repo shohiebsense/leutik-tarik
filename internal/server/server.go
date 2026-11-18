@@ -48,6 +48,7 @@ func NewWithOptions(o Options) http.Handler {
 	u := ui.UI{Store: s, Policies: policies}
 	mux.HandleFunc("/policies", u.PoliciesPage)
 	mux.HandleFunc("/services", u.Services)
+	mux.HandleFunc("/services/{service}", u.ServiceDetail)
 	mux.HandleFunc("/incidents", u.Incidents)
 	mux.HandleFunc("/profiles", u.Profiles)
 	mux.HandleFunc("/profiles/{profileID}", u.ProfileDetail)

@@ -165,3 +165,63 @@ func (c *ClickHouse) EndpointStats(ctx context.Context, from, to time.Time, limi
 	}
 	return out, nil
 }
+
+// HTTPFailures lists failed responses for one service (empty service = all),
+// split into 4xx and 5xx by the caller via Class.
+func (c *ClickHouse) HTTPFailures(ctx context.Context, service string, from, to time.Time, limit int) ([]HTTPFailure, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	// Placeholders are bound in order of appearance across the whole statement,
+	// so the subquery's two come first and the service filter's third, if any.
+	sql := fmt.Sprintf(`SELECT service_name, http_route, http_method, status_code,
+			count() AS n, max(start_time) AS last_seen, any(trace_id) AS example
+		FROM (SELECT * FROM spans WHERE start_time >= ? AND start_time <= ?
+		      LIMIT 1 BY trace_id, span_id)
+		WHERE status_code >= 400 AND http_route != '' %s
+		GROUP BY service_name, http_route, http_method, status_code
+		ORDER BY n DESC
+		LIMIT %d`,
+		map[bool]string{true: "AND service_name = ?", false: ""}[service != ""], limit)
+
+	args := []any{chTime(from), chTime(to)}
+	if service != "" {
+		args = append(args, service)
+	}
+	rows, err := c.queryAggregate(ctx, sql, args)
+	if err != nil {
+		return nil, err
+	}
+	var out []HTTPFailure
+	for _, raw := range rows {
+		var r struct {
+			Service  string `json:"service_name"`
+			Route    string `json:"http_route"`
+			Method   string `json:"http_method"`
+			Status   int    `json:"status_code"`
+			N        int64  `json:"n"`
+			LastSeen string `json:"last_seen"`
+			Example  string `json:"example"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		out = append(out, HTTPFailure{
+			Service: r.Service, Route: r.Route, Method: r.Method,
+			StatusCode: r.Status, Class: statusClass(r.Status),
+			Count: r.N, LastSeen: parseCHTime(r.LastSeen), ExampleTrace: r.Example,
+		})
+	}
+	return out, nil
+}
+
+func statusClass(code int) string {
+	switch {
+	case code >= 500:
+		return "5xx"
+	case code >= 400:
+		return "4xx"
+	default:
+		return ""
+	}
+}

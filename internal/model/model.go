@@ -79,6 +79,9 @@ const (
 	OutcomeServerError = "server_error"
 	OutcomeError       = "error" // non-HTTP error (OTLP status code = error)
 	OutcomeUnknown     = "unknown"
+	// OutcomeOK is a non-HTTP span that recorded no error (OTLP status UNSET).
+	// Distinct from success, which means an explicit 2xx/OK was reported.
+	OutcomeOK = "ok"
 )
 
 // Instrumentation completeness states (build prompt §5.2). Never upgraded by
@@ -127,6 +130,7 @@ type Summary struct {
 // severity ranks outcomes so a summary reports the worst one seen.
 var severity = map[string]int{
 	OutcomeSuccess:     0,
+	OutcomeOK:          0,
 	OutcomeUnknown:     1,
 	OutcomeClientError: 2,
 	OutcomeServerError: 3,
@@ -158,7 +162,7 @@ func Summarize(spans []Span) Summary {
 			worst = sev
 			s.Outcome = sp.Outcome
 		}
-		if sp.Outcome != OutcomeSuccess && sp.Outcome != OutcomeUnknown {
+		if sp.Outcome != OutcomeSuccess && sp.Outcome != OutcomeOK && sp.Outcome != OutcomeUnknown {
 			s.ErrorSpans++
 		}
 		if sp.Duration > s.Slowest.Duration {

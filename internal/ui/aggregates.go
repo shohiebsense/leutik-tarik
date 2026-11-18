@@ -62,6 +62,76 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ServiceDetail is one service's page: its numbers, its slowest endpoints and
+// its failed responses. The operations list no longer carries a Service column,
+// so this page is where service context lives.
+func (u UI) ServiceDetail(w http.ResponseWriter, r *http.Request) {
+	stats, ok := u.Store.(store.Stats)
+	if !ok {
+		http.Error(w, "this store cannot aggregate", http.StatusNotImplemented)
+		return
+	}
+	name := r.PathValue("service")
+	from, to := u.window(r)
+
+	all, err := stats.ServiceStats(r.Context(), from, to)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var stat store.ServiceStat
+	var found bool
+	for _, s := range all {
+		if s.Service == name {
+			stat, found = s, true
+			break
+		}
+	}
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+
+	endpoints, err := stats.EndpointStats(r.Context(), from, to, 50)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var mine []store.EndpointStat
+	for _, e := range endpoints {
+		if e.Service == name {
+			mine = append(mine, e)
+		}
+	}
+
+	failures, err := stats.HTTPFailures(r.Context(), name, from, to, 200)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var bad4, bad5 []store.HTTPFailure
+	for _, f := range failures {
+		if f.Class == "5xx" {
+			bad5 = append(bad5, f)
+		} else {
+			bad4 = append(bad4, f)
+		}
+	}
+
+	render(w, serviceDetailView, map[string]any{
+		"Title":      name,
+		"Service":    name,
+		"Stat":       stat,
+		"Endpoints":  mine,
+		"Bad4":       bad4,
+		"Bad5":       bad5,
+		"From":       from.Format(inputTimeLayout),
+		"To":         to.Format(inputTimeLayout),
+		"Window":     to.Sub(from),
+		"Judgements": judgementIndex(u.Verdicts(), mine),
+	})
+}
+
 // Incidents groups failures by fingerprint so frequency is visible.
 func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 	stats, ok := u.Store.(store.Stats)

@@ -204,3 +204,61 @@ func (m *Memory) EndpointStats(_ context.Context, from, to time.Time, limit int)
 	}
 	return out, nil
 }
+
+// HTTPFailures mirrors the ClickHouse aggregation for tests and the memory mode.
+func (m *Memory) HTTPFailures(_ context.Context, service string, from, to time.Time, limit int) ([]HTTPFailure, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	type key struct {
+		svc, route, method string
+		status             int
+	}
+	agg := map[key]*HTTPFailure{}
+	seen := map[string]struct{}{}
+	for _, r := range m.records {
+		s := r.Span
+		if s.StartTime.Before(from) || s.StartTime.After(to) || s.StatusCode < 400 || s.HTTPRoute == "" {
+			continue
+		}
+		if service != "" && s.ServiceName != service {
+			continue
+		}
+		k := s.TraceID + "|" + s.SpanID
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		kk := key{s.ServiceName, s.HTTPRoute, s.HTTPMethod, s.StatusCode}
+		f := agg[kk]
+		if f == nil {
+			f = &HTTPFailure{
+				Service: s.ServiceName, Route: s.HTTPRoute, Method: s.HTTPMethod,
+				StatusCode: s.StatusCode, Class: statusClass(s.StatusCode),
+				LastSeen: s.StartTime, ExampleTrace: s.TraceID,
+			}
+			agg[kk] = f
+		}
+		f.Count++
+		if s.StartTime.After(f.LastSeen) {
+			f.LastSeen = s.StartTime
+			f.ExampleTrace = s.TraceID
+		}
+	}
+	out := make([]HTTPFailure, 0, len(agg))
+	for _, f := range agg {
+		out = append(out, *f)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Class != out[j].Class {
+			return out[i].Class < out[j].Class
+		}
+		return out[i].Count > out[j].Count
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}

@@ -198,20 +198,34 @@ func intOf(attrs map[string]string, keys ...string) int {
 	return 0
 }
 
-// outcome classifies the span. otlpStatus is the OTLP status code: 0 unset,
+// outcome classifies a span. otlpStatus is the OTLP status code: 0 unset,
 // 1 ok, 2 error.
+//
+// OTLP defines UNSET as "no error was recorded", not "we do not know", so a
+// database or service span with UNSET is reported as ok. Labelling those
+// "unknown" made every internal span in every trace look unresolved, which is
+// noise rather than honesty - the one case that genuinely stays unknown is a
+// span with no status and no outcome semantics at all, which does not occur in
+// practice.
 func outcome(statusCode, otlpStatus int) string {
 	switch {
-	case otlpStatus == 2:
-		return model.OutcomeError
+	// An HTTP status is more specific than a generic OTLP error: a 5xx and a 4xx
+	// are different problems and the whole /services split depends on telling
+	// them apart.
 	case statusCode >= 500:
 		return model.OutcomeServerError
 	case statusCode >= 400:
 		return model.OutcomeClientError
+	case otlpStatus == 2:
+		return model.OutcomeError
 	case statusCode > 0:
 		return model.OutcomeSuccess
+	case otlpStatus == 1:
+		return model.OutcomeSuccess
 	default:
-		return model.OutcomeUnknown
+		// UNSET on a non-HTTP span: the operation completed and nothing reported
+		// an error.
+		return model.OutcomeOK
 	}
 }
 
