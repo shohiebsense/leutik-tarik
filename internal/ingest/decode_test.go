@@ -420,3 +420,21 @@ func TestIngestRedactionIsOptIn(t *testing.T) {
 		t.Error("ingest did not redact with LEUTIK_REDACT=on")
 	}
 }
+
+// gin stringifies an attached error as "Error #01: message\n" and the exporter
+// forwards that as the span status. The stored reason should be the message.
+func TestStatusMessageStripsGinEnvelope(t *testing.T) {
+	cases := map[string]string{
+		"Error #01: invalid credentials\n":           "invalid credentials",
+		"Error #01: authorization header required\n": "authorization header required",
+		"Error #01: a\nError #02: b":                 "a b",
+		"settlement gateway timeout":                 "settlement gateway timeout",
+		"   ":                                        "",
+		"-":                                          "",
+	}
+	for in, want := range cases {
+		if got := statusMessage(in); got != want {
+			t.Errorf("statusMessage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

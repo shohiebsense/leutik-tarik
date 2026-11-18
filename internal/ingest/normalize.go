@@ -89,7 +89,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 
 			ErrorType:     firstOf(r.attrs, "error.type", "error"),
 			Outcome:       outcome,
-			StatusMessage: r.statusMsg,
+			StatusMessage: statusMessage(r.statusMsg),
 			Attributes:    r.attrs,
 			Links:         r.links,
 		}

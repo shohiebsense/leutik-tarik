@@ -97,3 +97,24 @@ func truncateName(s string) string {
 	}
 	return s[:cut] + "…"
 }
+
+// ginErrorPrefix is what gin puts in front of every attached error when it is
+// stringified (c.Errors.String()). Instrumentation that forwards that string as
+// the span status therefore stores "Error #01: invalid credentials\n" as the
+// reason, which reads badly in the UI and splits one incident into a group per
+// error index.
+var ginErrorPrefix = regexp.MustCompile(`(?i)error #\d+:\s*`)
+
+// statusMessage is the failure reason as a person would say it: gin's envelope
+// removed, one line, trimmed. Instrumentation is not the thing to fix here - the
+// envelope is bookkeeping, not information.
+func statusMessage(raw string) string {
+	// Applied to every occurrence, not just the first: several errors are
+	// stringified as one line each, or as one line with both envelopes in it.
+	s := ginErrorPrefix.ReplaceAllString(raw, "")
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "-" {
+		return ""
+	}
+	return s
+}
