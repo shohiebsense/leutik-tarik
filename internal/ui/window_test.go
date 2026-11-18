@@ -271,3 +271,59 @@ func TestAggregatePresetsStayOnPage(t *testing.T) {
 		t.Errorf("preset link = %q", href)
 	}
 }
+
+// The user's report: route=abt returned nothing and the cause was a hidden
+// method=GET. The filters in force must be visible with a way to drop each one.
+func TestFiltersAreVisibleAndRemovable(t *testing.T) {
+	now := time.Date(2026, 11, 18, 20, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations/fare-membership?route=abt&method=GET&service=fare-membership&last=24h", now)
+
+	if !strings.Contains(body, "route contains abt") {
+		t.Error("route filter is not shown as a chip")
+	}
+	if !strings.Contains(body, "method GET") {
+		t.Error("the hidden method filter is still invisible")
+	}
+	// Dropping method must keep route and service.
+	href := linkAfterLabel(body, "method GET")
+	if strings.Contains(href, "method=") || !strings.Contains(href, "route=abt") {
+		t.Errorf("remove-method link = %q", href)
+	}
+}
+
+// "Nothing found" must say what was asked for, so it cannot read as "not recorded".
+func TestEmptyStateNamesTheFilters(t *testing.T) {
+	now := time.Date(2026, 11, 18, 20, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations?route=abt&method=GET", now)
+
+	if !strings.Contains(body, "No operations match") {
+		t.Fatalf("empty state is not explained: %s", footerLine(body))
+	}
+	for _, want := range []string{"route contains", "method"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("empty state does not name %q", want)
+		}
+	}
+	if !strings.Contains(body, "clear all filters") {
+		t.Error("empty state offers no way out")
+	}
+}
+
+// linkAfterLabel returns the href that follows a label in the markup (chips put
+// the text first and the remove anchor after it).
+func linkAfterLabel(body, label string) string {
+	i := strings.Index(body, label)
+	if i < 0 {
+		return ""
+	}
+	start := strings.Index(body[i:], `href="`)
+	if start < 0 {
+		return ""
+	}
+	start += i + len(`href="`)
+	end := strings.Index(body[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return body[start : start+end]
+}

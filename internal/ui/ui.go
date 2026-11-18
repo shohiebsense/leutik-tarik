@@ -202,6 +202,84 @@ func windowPresets(basePath string, in url.Values) []presetSpan {
 	return out
 }
 
+// activeFilter is one filter the reader can see and remove. A filter they cannot
+// see is a filter that lies: "route=abt" returning nothing looked like a missing
+// endpoint until the hidden "method=GET" was found.
+type activeFilter struct {
+	Label     string
+	RemoveURL string
+}
+
+// filterChips lists the filters in force, each with the URL that drops it.
+func filterChips(basePath string, in url.Values, last string) []activeFilter {
+	// An empty value means "no filter"; the form posts them all so removing one
+	// has to be a URL, not an empty field.
+	labels := []struct{ key, prefix string }{
+		{"service", "service "},
+		{"route", "route contains "},
+		{"method", "method "},
+		{"outcome", "outcome "},
+		{"q", "matches "},
+	}
+	var out []activeFilter
+	for _, l := range labels {
+		v := strings.TrimSpace(in.Get(l.key))
+		if v == "" {
+			continue
+		}
+		out = append(out, activeFilter{
+			Label:     l.prefix + v,
+			RemoveURL: withoutParam(basePath, in, l.key),
+		})
+	}
+	if in.Get("all") == "1" {
+		out = append(out, activeFilter{
+			Label:     "background jobs included",
+			RemoveURL: withoutParam(basePath, in, "all"),
+		})
+	}
+	return out
+}
+
+// withoutParam returns the same page with one query parameter removed.
+func withoutParam(basePath string, in url.Values, key string) string {
+	out := url.Values{}
+	for k, v := range in {
+		if k == key || (key == "all" && k == "all") {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return basePath
+	}
+	return basePath + "?" + out.Encode()
+}
+
+// describeFilters is the sentence shown when a search matches nothing: it names
+// what was asked for, so "not found" cannot be confused with "not recorded".
+func describeFilters(in url.Values, last string) string {
+	var parts []string
+	for _, k := range []string{"q", "service", "route", "method", "outcome"} {
+		if v := strings.TrimSpace(in.Get(k)); v != "" {
+			name := k
+			if k == "q" {
+				name = "matches"
+			} else if k == "route" {
+				name = "route contains"
+			}
+			parts = append(parts, name+" \u201c"+v+"\u201d")
+		}
+	}
+	if in.Get("all") == "1" {
+		parts = append(parts, "background jobs included")
+	}
+	if len(parts) == 0 {
+		return "No operations match."
+	}
+	return "No operations match " + strings.Join(parts, ", ") + "."
+}
+
 // Operations renders the searchable operations list.
 func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	// Service scope comes from the path (/operations/{service}) so the URL reads
@@ -308,6 +386,9 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"WindowLabel": policy.HumanDuration(to.Sub(from)),
 
 		"Text":           text,
+		"Filters":        filterChips(basePath, r.URL.Query(), last),
+		"EmptyReason":    describeFilters(r.URL.Query(), last),
+		"ClearURL":       basePath + "?last=" + last,
 		"Presets":        windowPresets(basePath, r.URL.Query()),
 		"Live":           live,
 		"Last":           last,
@@ -912,6 +993,11 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .find button{padding:.5rem 1rem;background:#111;color:#fff;border:0;border-radius:5px;font-size:.9rem;font-weight:600;cursor:pointer}
 .find button:hover{background:#333}
 .find .clear{font-size:.85rem;color:#666}
+.chips{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:#666;margin:0 0 .5rem}
+.chips .k{text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;color:#888;margin-right:.2rem}
+.chip{display:inline-flex;align-items:center;gap:.35rem;padding:.1rem .5rem;background:#eef3f8;border:1px solid #d6e2ee;border-radius:12px;color:#234}
+.chip a{text-decoration:none;color:#567;font-weight:700}
+.chip a:hover{color:#b00020}
 .presets{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:#666;margin:0 0 .6rem}
 .presets .k{text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;color:#888;margin-right:.2rem}
 .presets a{padding:.15rem .55rem;border:1px solid #e0e4e8;border-radius:12px;text-decoration:none;color:#234}
@@ -1373,6 +1459,13 @@ const operationsTemplate = `{{define "content"}}
     <button type="submit">Find</button>
     {{if .Text}}<a class="clear" href="{{.LiveURL}}">clear</a>{{end}}
   </p>
+  {{/* Filters in force, each removable. Anything hiding in "more filters" shows
+       up here, because an invisible filter turns a typo into "not found". */}}
+  {{if .Filters}}<p class="chips">
+    <span class="k">filters</span>
+    {{range .Filters}}<span class="chip">{{.Label}} <a href="{{.RemoveURL}}" title="remove this filter">×</a></span>{{end}}
+    <a class="clear" href="{{.ClearURL}}">clear all</a>
+  </p>{{end}}
   {{/* Click, do not type: a date field is the slowest way to ask "the last
        hour?". A typed range still works, but only when you mean to pin one. */}}
   <p class="presets">
@@ -1421,7 +1514,10 @@ const operationsTemplate = `{{define "content"}}
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{else if or (eq .Outcome "success") (eq .Outcome "ok")}}good{{end}}">{{.Outcome}}</td>
 </tr>
 {{else}}
-<tr><td colspan="4" class="dim">No operations in this window.</td></tr>
+<tr><td colspan="4" class="dim">{{.EmptyReason}}
+      Check the filters above — a filter on method or outcome excludes whole
+      families of requests. <a href="{{.ClearURL}}">clear all filters</a>, or
+      widen the period.</td></tr>
 {{end}}
 </tbody>
 </table>
