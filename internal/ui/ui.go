@@ -98,6 +98,20 @@ const livePollSeconds = 15
 // defaultWindow is the rolling window a bare /operations asks for.
 const defaultWindow = 15 * time.Minute
 
+// durationParam is the shortest form of d that time.ParseDuration accepts:
+// "15m", "24h" - never "1d", which Go cannot parse and which used to collapse a
+// 24h window back to 15m the moment the form was submitted.
+func durationParam(d time.Duration) string {
+	switch {
+	case d%time.Hour == 0:
+		return itoa(int(d/time.Hour)) + "h"
+	case d%time.Minute == 0:
+		return itoa(int(d/time.Minute)) + "m"
+	default:
+		return d.String()
+	}
+}
+
 // lastWindow parses a rolling window length ("15m", "1h"). It refuses anything
 // zero, negative or longer than a week: a guessing typo should fall back to the
 // default window, not scan the whole store.
@@ -163,7 +177,12 @@ type presetSpan struct {
 	On    bool
 }
 
-var presetSpans = []string{"15m", "1h", "6h", "24h", "7d"}
+// Label is what a person reads; Last is what time.ParseDuration accepts. "7d"
+// would not parse, so it posts 168h - the two used to disagree and silently fell
+// back to the default window.
+var presetSpans = []struct{ Label, Last string }{
+	{"15m", "15m"}, {"1h", "1h"}, {"6h", "6h"}, {"24h", "24h"}, {"7d", "168h"},
+}
 
 // windowPresets builds the click targets, marking the one currently in use.
 func windowPresets(basePath string, in url.Values) []presetSpan {
@@ -172,12 +191,12 @@ func windowPresets(basePath string, in url.Values) []presetSpan {
 		current = "15m"
 	}
 	out := make([]presetSpan, 0, len(presetSpans))
-	for _, last := range presetSpans {
+	for _, p := range presetSpans {
 		out = append(out, presetSpan{
-			Label: last,
-			Last:  last,
-			URL:   liveURL(basePath, in, last),
-			On:    current == last,
+			Label: p.Label,
+			Last:  p.Last,
+			URL:   liveURL(basePath, in, p.Last),
+			On:    current == p.Last || current == p.Label,
 		})
 	}
 	return out
@@ -232,7 +251,7 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	if t, ok := parseTime(r.URL.Query().Get("to")); ok {
 		to, live = t, false
 	}
-	last := policy.HumanDuration(span) // "15m", not "15m0s"
+	last := durationParam(span)
 	if !live {
 		// A frozen window still needs a length for its labels.
 		last = ""

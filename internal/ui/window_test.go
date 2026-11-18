@@ -193,3 +193,36 @@ func TestFreeTextSearchBox(t *testing.T) {
 		t.Error("search box has no hint about what to paste")
 	}
 }
+
+// Every preset must survive a round trip through the URL and the hidden form
+// field. "7d" and "1d" do not parse with time.ParseDuration, and shipping one
+// silently turned a 24h view into a 15m one on the next submit.
+func TestPresetValuesParse(t *testing.T) {
+	for _, p := range presetSpans {
+		d, ok := lastWindow(p.Last)
+		if !ok {
+			t.Fatalf("preset %s posts last=%q, which does not parse", p.Label, p.Last)
+		}
+		// And the value we write back must itself parse.
+		back := durationParam(d)
+		if got, ok := lastWindow(back); !ok || got != d {
+			t.Fatalf("preset %s round trip: %q -> %q", p.Label, d, back)
+		}
+	}
+}
+
+// A 24h window must come back as 24h, not as "1d" that the parser rejects.
+func TestDurationParam(t *testing.T) {
+	cases := map[time.Duration]string{
+		15 * time.Minute:   "15m",
+		time.Hour:          "1h",
+		24 * time.Hour:     "24h",
+		7 * 24 * time.Hour: "168h",
+		90 * time.Second:   "1m30s",
+	}
+	for in, want := range cases {
+		if got := durationParam(in); got != want {
+			t.Errorf("durationParam(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
