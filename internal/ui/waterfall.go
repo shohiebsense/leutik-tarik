@@ -50,7 +50,11 @@ type wfTick struct {
 const (
 	wfBarHeight = 18
 	wfRowGap    = 6
-	wfRightPad  = 16
+	// wfTopPad reserves the axis band. Without it the tick labels were drawn at
+	// y=10, exactly where the first row starts, so the axis sat on top of the
+	// first bar.
+	wfTopPad   = 30
+	wfRightPad = 16
 	// Approximate advance of the 11px monospace label font, used to cut labels
 	// to the column instead of letting them run under the bars.
 	wfCharWidth = 6.2
@@ -121,13 +125,13 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 			Prefix:   row.Prefix,
 			X:        x,
 			W:        w,
-			Y:        10 + i*(wfBarHeight+wfRowGap),
+			Y:        wfTopPad + i*(wfBarHeight+wfRowGap),
 			Label:    fitLabel(row.Prefix+shortLabel(s), labelW-10),
 			Critical: critical[s.SpanID],
 			Color:    outcomeColor(s.Outcome),
 		})
 	}
-	wf.Height = 20 + len(spans)*(wfBarHeight+wfRowGap)
+	wf.Height = wfTopPad + len(spans)*(wfBarHeight+wfRowGap) + 6
 	wf.Ticks = ticks(total, plot, labelW)
 	wf.HTML = wf.svg()
 	return wf
@@ -241,13 +245,14 @@ func (wf waterfall) svg() template.HTML {
 	fmt.Fprintf(&b, `<rect x="0" y="0" width="%d" height="%d" fill="#fbfbfb"/>`, wf.Width, wf.Height)
 
 	labelW := labelColumn(wf.Width)
+	fmt.Fprintf(&b, `<line x1="0" y1="%d" x2="%d" y2="%d" stroke="#e8e8e8" stroke-width="1"/>`, wfTopPad-8, wf.Width, wfTopPad-8)
 	fmt.Fprintf(&b, `<line x1="%d" y1="0" x2="%d" y2="%d" stroke="#eee" stroke-width="1"/>`, labelW-4, labelW-4, wf.Height)
 	for _, t := range wf.Ticks {
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%d" stroke="#e3e3e3" stroke-width="1"/>`, t.X, t.X, wf.Height)
 		if t.Last {
-			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888" text-anchor="end">%s</text>`, t.X-2, 10, t.Label)
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888" text-anchor="end">%s</text>`, t.X-2, 14, t.Label)
 		} else {
-			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888">%s</text>`, t.X+2, 10, t.Label)
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" font-size="10" fill="#888">%s</text>`, t.X+2, 14, t.Label)
 		}
 	}
 

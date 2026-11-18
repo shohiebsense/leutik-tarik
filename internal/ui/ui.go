@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/shohiebsense/leutik-tarik/internal/model"
@@ -149,10 +150,45 @@ type traceRow struct {
 	Offset time.Duration
 	// Depth is 0 for the root; children are indented one level.
 	Depth int
-	// Prefix is the tree drawing for this row (ancestor bars + branch glyph).
-	// Without it every nested row rendered the same "└", which read as a flat
-	// list even when the depth was correct.
+	// Prefix is the outline glyph string used inside the SVG waterfall, where each
+	// label is its own text run.
 	Prefix string
+	// TreeHTML is the span name wrapped in one nested block per depth level.
+	//
+	// Glyph-based trees (├ │ └) were tried first and cannot work here: a
+	// box-drawing character does not fill the line box, so consecutive rows show
+	// a gap and the vertical lines read as disconnected marks. Nested blocks give
+	// a continuous guide whose height is the row's own content.
+	TreeHTML template.HTML
+}
+
+// treeHTML nests one block per depth level, so the guide line is drawn by CSS on
+// each level and cannot leave the gaps a glyph-based tree produces.
+func treeHTML(depth int, name string) template.HTML {
+	var b strings.Builder
+	levels := depth
+	if levels < 0 {
+		levels = 0
+	}
+	// Every level gets the same class: an earlier version marked the outermost as
+	// "top" and zeroed its padding, which cancelled the indentation for every row.
+	for i := 0; i < levels; i++ {
+		b.WriteString(`<span class="lvl">`)
+	}
+	b.WriteString(template.HTMLEscapeString(name))
+	for i := 0; i < levels; i++ {
+		b.WriteString("</span>")
+	}
+	return template.HTML(b.String())
+}
+
+// displayName is the label used in the span list: the route for a request, the
+// span name otherwise.
+func displayName(s model.Span) string {
+	if s.HTTPRoute != "" {
+		return s.HTTPRoute
+	}
+	return s.Name
 }
 
 // spanDetail is one span plus its attributes, rendered as a block in call order.
@@ -212,6 +248,10 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			correlated = append(correlated, l)
 		}
 	}
+	for i := range rows {
+		rows[i].TreeHTML = treeHTML(rows[i].Depth, displayName(rows[i].Span))
+	}
+
 	var details []spanDetail
 	for _, row := range rows {
 		keys := make([]string, 0, len(row.Span.Attributes))
@@ -402,15 +442,21 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
-table td.tree{
-  white-space:pre;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  font-size:.82rem;
-  line-height:1.15;
-  color:#333;
+/* The tree glyphs must touch between rows: any vertical padding or leading above
+   1 leaves a gap and the bars read as disconnected marks. */
+table td.tree{padding-top:.15rem;padding-bottom:.15rem}
+.tree .lvl{
+  display:block;
+  /* Visible at a glance: #dfe3e6 disappeared in a downscaled screenshot, which
+     is how most people will look at this. */
+  border-left:1px solid #b9c0c7;
+  padding-left:.75em;
+  margin-left:.2em;
 }
+
 .code{display:inline-block;padding:0 .35rem;border-radius:3px;background:#eef;color:#234;font-variant-numeric:tabular-nums}
 .code.bad{background:#fdecef;color:#b00020}
+.good{color:#1a7f37}
 .code.warn{background:#fdf6e3;color:#8a5b00}
 .spanblock{border-left:2px solid #e6e6e6;margin:.25rem 0 .25rem 0;padding:.15rem 0 .15rem .6rem}
 .spanblock.root{border-left:2px solid #bbb}
@@ -738,7 +784,7 @@ const operationsTemplate = `{{define "content"}}
     {{if .StatusCode}}<span class="code {{if ge .StatusCode 500}}bad{{else if ge .StatusCode 400}}warn{{end}}">{{.StatusCode}}</span>{{end}}
   </td>
   <td>{{dur .Duration}}</td>
-  <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{end}}">{{.Outcome}}</td>
+  <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{else if or (eq .Outcome "success") (eq .Outcome "ok")}}good{{end}}">{{.Outcome}}</td>
   <td><a href="/traces/{{.TraceID}}">trace</a></td>
 </tr>
 {{else}}
@@ -768,7 +814,7 @@ const traceTemplate = `{{define "content"}}
 <tbody>
 {{range .Rows}}
 <tr>
-  <td class="tree">{{.Prefix}}{{.Span.Name}}</td>
+  <td class="tree">{{.TreeHTML}}</td>
   <td>{{.Span.ServiceName}}</td>
   <td>{{.Span.Kind}}</td>
   <td class="dim">{{if .Span.DBSystem}}{{.Span.DBSystem}} {{.Span.DBOperation}}{{if .Span.DBQuerySummary}} · {{.Span.DBQuerySummary}}{{end}}{{else if .Span.RPCSystem}}{{.Span.RPCSystem}} {{.Span.RPCService}}/{{.Span.RPCMethod}}{{else if .Span.MessagingSystem}}{{.Span.MessagingSystem}} {{.Span.MessagingOperation}} {{.Span.MessagingDestination}}{{end}}{{if .Span.StatusMessage}} · {{.Span.StatusMessage}}{{end}}</td>
