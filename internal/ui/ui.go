@@ -154,6 +154,35 @@ func liveURL(basePath string, in url.Values, last string) string {
 	return basePath + "?" + out.Encode()
 }
 
+// presetSpan is one clickable time range. Nobody should have to type a date to
+// ask "what happened in the last hour".
+type presetSpan struct {
+	Label string
+	Last  string
+	URL   string
+	On    bool
+}
+
+var presetSpans = []string{"15m", "1h", "6h", "24h", "7d"}
+
+// windowPresets builds the click targets, marking the one currently in use.
+func windowPresets(basePath string, in url.Values) []presetSpan {
+	current := in.Get("last")
+	if current == "" && in.Get("from") == "" && in.Get("to") == "" {
+		current = "15m"
+	}
+	out := make([]presetSpan, 0, len(presetSpans))
+	for _, last := range presetSpans {
+		out = append(out, presetSpan{
+			Label: last,
+			Last:  last,
+			URL:   liveURL(basePath, in, last),
+			On:    current == last,
+		})
+	}
+	return out
+}
+
 // Operations renders the searchable operations list.
 func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	// Service scope comes from the path (/operations/{service}) so the URL reads
@@ -170,11 +199,13 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		title = "Operations · " + service
 	}
 
+	text := strings.TrimSpace(r.URL.Query().Get("q"))
 	q := store.Query{
 		Service: service,
 		Route:   r.URL.Query().Get("route"),
 		Method:  r.URL.Query().Get("method"),
 		Outcome: r.URL.Query().Get("outcome"),
+		Text:    text,
 		// Background jobs are opt-in: they are useful, but they are not requests.
 		IncludeBackground: r.URL.Query().Get("all") == "1",
 		Limit:             store.MaxLimit,
@@ -257,6 +288,8 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		// stops at hours, so a 15-minute window would read "15m0s".
 		"WindowLabel": policy.HumanDuration(to.Sub(from)),
 
+		"Text":           text,
+		"Presets":        windowPresets(basePath, r.URL.Query()),
 		"Live":           live,
 		"Last":           last,
 		"RefreshSeconds": refresh,
@@ -848,6 +881,23 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .topright .big{display:block;font-size:1rem;font-weight:600}
 .topright .tz{display:block;font-size:.75rem;color:#777}
 @media (max-width:700px){.topright{text-align:left}}
+.find{display:flex;gap:.5rem;align-items:center;margin:.2rem 0 .5rem;flex-wrap:wrap}
+.find input{flex:1 1 20rem;min-width:0;padding:.5rem .6rem;font-size:.95rem;border:1px solid #d0d5da;border-radius:5px;font-family:inherit}
+.find input:focus{outline:2px solid #06c;border-color:#06c}
+.find button{padding:.5rem 1rem;background:#111;color:#fff;border:0;border-radius:5px;font-size:.9rem;font-weight:600;cursor:pointer}
+.find button:hover{background:#333}
+.find .clear{font-size:.85rem;color:#666}
+.presets{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:#666;margin:0 0 .6rem}
+.presets .k{text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;color:#888;margin-right:.2rem}
+.presets a{padding:.15rem .55rem;border:1px solid #e0e4e8;border-radius:12px;text-decoration:none;color:#234}
+.presets a:hover{border-color:#9cc0e8}
+.presets a.on{background:#111;color:#fff;border-color:#111}
+.presets .pintoggle{margin-left:.6rem;padding-left:.6rem;border-left:1px solid #e6e6e6}
+.presets .pintoggle input{padding:.15rem .35rem;font-size:.78rem;border:1px solid #e0e4e8;border-radius:4px}
+.presets .pintoggle label{color:#888}
+.morefilters{margin:.1rem 0 .7rem;font-size:.85rem}
+.morefilters summary{cursor:pointer;color:#06c}
+.morefilters input,.morefilters select{padding:.3rem .45rem;border:1px solid #e0e4e8;border-radius:4px;font-size:.85rem;margin:.15rem .3rem .15rem 0}
 /* The live region swaps in place, so the only motion is a brief fade: a jump
    cut would read as "did it change?", and a full reload would lose the scroll. */
 #live{transition:opacity .14s ease}
@@ -1286,22 +1336,39 @@ const operationsTemplate = `{{define "content"}}
 </div>
 {{end}}
 
+{{/* One box. The viewer arrives holding a media token, a trace id or a customer
+     id and should not have to work out which field it belongs in. */}}
 <form method="get" action="{{.BasePath}}">
-  <input type="text" name="service" placeholder="service" value="{{.Query.Service}}">
-  <input type="text" name="route" placeholder="route" value="{{.Query.Route}}">
-  <input type="text" name="method" placeholder="method" value="{{.Query.Method}}">
-  <select name="outcome">
-    <option value="">all outcomes</option>
-    {{range .Outcomes}}<option value="{{.}}" {{if eq . $.Query.Outcome}}selected{{end}}>{{.}}</option>{{end}}
-  </select>
-  {{/* Empty while live: the form used to post its own preview of the window,
-       which quietly froze the page on every search. Typing a range is still how
-       you pin one - that is the only thing that should stop the clock. */}}
-  <input type="hidden" name="last" value="{{.Last}}">
-  <label>from <input type="text" name="from" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{if not .Live}}{{.From}}{{end}}"></label>
-  <label>to <input type="text" name="to" size="18" placeholder="YYYY-MM-DD HH:MM" value="{{if not .Live}}{{.To}}{{end}}"></label>
-  <label><input type="checkbox" name="all" value="1" {{if .Query.IncludeBackground}}checked{{end}}> include background jobs</label>
-  <button type="submit">Search</button>
+  <p class="find">
+    <input type="search" name="q" value="{{.Text}}" size="46"
+      placeholder="paste a media token, customer id, trace id, route or error — or leave empty to see everything">
+    <button type="submit">Find</button>
+    {{if .Text}}<a class="clear" href="{{.LiveURL}}">clear</a>{{end}}
+  </p>
+  {{/* Click, do not type: a date field is the slowest way to ask "the last
+       hour?". A typed range still works, but only when you mean to pin one. */}}
+  <p class="presets">
+    <span class="k">period</span>
+    {{range .Presets}}<a href="{{.URL}}" class="{{if .On}}on{{end}}">{{.Label}}</a>{{end}}
+    <span class="pintoggle">
+      <input type="hidden" name="last" value="{{.Last}}">
+      <label>pin <input type="text" name="from" size="16" placeholder="from" value="{{if not .Live}}{{.From}}{{end}}"></label>
+      <label><input type="text" name="to" size="16" placeholder="to" value="{{if not .Live}}{{.To}}{{end}}"></label>
+    </span>
+  </p>
+  <details class="morefilters">
+    <summary>more filters</summary>
+    <p>
+      <input type="text" name="service" placeholder="service" value="{{.Query.Service}}">
+      <input type="text" name="route" placeholder="route" value="{{.Query.Route}}">
+      <input type="text" name="method" placeholder="method" value="{{.Query.Method}}">
+      <select name="outcome">
+        <option value="">all outcomes</option>
+        {{range .Outcomes}}<option value="{{.}}" {{if eq . $.Query.Outcome}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+      <label><input type="checkbox" name="all" value="1" {{if .Query.IncludeBackground}}checked{{end}}> include background jobs</label>
+    </p>
+  </details>
 </form>
 
 {{/* Everything the clock moves lives in here and is swapped as one unit. */}}

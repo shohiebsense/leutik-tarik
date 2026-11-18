@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,11 @@ type Query struct {
 	// (cron jobs, workers). Off by default: instrumented workers produce a root
 	// span every tick, and a list of those buries the requests it exists to show.
 	IncludeBackground bool
+
+	// Text is one free-text term matched anywhere in the record: media token,
+	// customer id, trace id, route, error message. People arrive holding one of
+	// those, and picking the matching field out of a form is the hard part.
+	Text string
 
 	Limit int
 }
@@ -107,6 +113,9 @@ func (m *Memory) ListOperations(_ context.Context, q Query) ([]model.Span, error
 		if q.Outcome != "" && s.Outcome != q.Outcome {
 			continue
 		}
+		if q.Text != "" && !matchesText(s, q.Text) {
+			continue
+		}
 		if !q.From.IsZero() && s.StartTime.Before(q.From) {
 			continue
 		}
@@ -164,4 +173,21 @@ func (m *Memory) GetTrace(_ context.Context, traceID string) ([]model.Span, erro
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartTime.Before(out[j].StartTime) })
 	return out, nil
+}
+
+// matchesText mirrors the ClickHouse free-text filter: one term, matched against
+// the fields a person actually pastes (id, route, name, message) and against
+// every captured attribute value.
+func matchesText(s model.Span, text string) bool {
+	for _, field := range []string{s.TraceID, s.ServiceName, s.HTTPRoute, s.Name, s.StatusMessage} {
+		if strings.Contains(field, text) {
+			return true
+		}
+	}
+	for k, v := range s.Attributes {
+		if strings.Contains(k, text) || strings.Contains(v, text) {
+			return true
+		}
+	}
+	return false
 }

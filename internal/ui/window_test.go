@@ -159,3 +159,37 @@ func TestLastWindow(t *testing.T) {
 		}
 	}
 }
+
+// The point of the presets: ask for an hour without typing a date.
+func TestPresetsAreClickableAndMarked(t *testing.T) {
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations?last=1h&route=%2Fabt%2Fscans", now)
+
+	for _, want := range []string{
+		`>15m</a>`, `>1h</a>`, `>6h</a>`, `>24h</a>`, `>7d</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing preset %s", want)
+		}
+	}
+	// The active preset carries route=/abt/scans, so switching period keeps the
+	// thing being looked at.
+	href := linkAfter(body, ">1h</a>")
+	if !strings.Contains(href, "route=%2Fabt%2Fscans") || !strings.Contains(href, "last=1h") {
+		t.Errorf("preset link lost its filters: %q", href)
+	}
+}
+
+// One search box, and it is the first field: pasting a token must not need a
+// decision about which field it belongs in.
+func TestFreeTextSearchBox(t *testing.T) {
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	body := livePage(t, "/operations?q=21616513243938675087", now)
+
+	if !strings.Contains(body, `name="q" value="21616513243938675087"`) {
+		t.Error("search box does not carry the pasted term")
+	}
+	if !strings.Contains(body, "paste a media token") {
+		t.Error("search box has no hint about what to paste")
+	}
+}

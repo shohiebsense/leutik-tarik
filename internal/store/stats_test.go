@@ -130,3 +130,30 @@ func TestOperationsDefaultToEntryPoints(t *testing.T) {
 		t.Fatalf("background list = %d rows, want 2", len(all))
 	}
 }
+
+// A viewer pastes a media token, not a field name. The free-text filter has to
+// find the span that carried it in its captured body.
+func TestMemoryTextSearchFindsAttributeValues(t *testing.T) {
+	m := store.NewMemory()
+	_ = m.Insert(context.Background(), []model.Record{
+		{Span: model.Span{TraceID: "aa", SpanID: "s1", ServiceName: "fare-membership",
+			HTTPRoute: "/abt/scans", Kind: "server", StartTime: time.Now(),
+			Attributes: map[string]string{"http.request.body": `{"abt_token":"21616513243938675087"}`}}},
+		{Span: model.Span{TraceID: "bb", SpanID: "s2", ServiceName: "fare-membership",
+			HTTPRoute: "/abt/scans", Kind: "server", StartTime: time.Now(),
+			Attributes: map[string]string{"http.request.body": `{"abt_token":"9999"}`}}},
+	})
+
+	got, err := m.ListOperations(context.Background(), store.Query{Text: "21616513243938675087"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TraceID != "aa" {
+		t.Fatalf("text search returned %d spans, want only aa", len(got))
+	}
+
+	// A trace id pasted into the same box works too.
+	if got, _ := m.ListOperations(context.Background(), store.Query{Text: "bb"}); len(got) != 1 || got[0].TraceID != "bb" {
+		t.Fatalf("trace-id search returned %d spans", len(got))
+	}
+}

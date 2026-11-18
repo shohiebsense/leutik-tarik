@@ -134,6 +134,21 @@ func (c *ClickHouse) ListOperations(ctx context.Context, q Query) ([]model.Span,
 		where = append(where, "outcome = ?")
 		args = append(args, q.Outcome)
 	}
+	if q.Text != "" {
+		// One box, because the viewer arrives holding a token, a trace id or a
+		// customer id and should not have to say which one it is. attributes
+		// carries the captured body and route params, which is where a media
+		// token and a customer id actually live.
+		where = append(where, `(position(trace_id, ?) > 0
+			OR position(service_name, ?) > 0
+			OR position(http_route, ?) > 0
+			OR position(name, ?) > 0
+			OR position(status_message, ?) > 0
+			OR position(toString(attributes), ?) > 0)`)
+		for range 6 {
+			args = append(args, q.Text)
+		}
+	}
 	if !q.From.IsZero() {
 		where = append(where, "start_time >= ?")
 		args = append(args, chTime(q.From))
