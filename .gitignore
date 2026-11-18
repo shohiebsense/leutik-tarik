@@ -22,3 +22,10 @@
 
 # go tooling
 /vendor/
+
+# Credentials never belong in the repo. Kept locally only.
+*.cred.md
+*.creds.md
+*credentials*.md
+.env
+.env.*
