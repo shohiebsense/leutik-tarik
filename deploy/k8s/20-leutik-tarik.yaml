@@ -58,6 +58,15 @@ data:
           outcome: [success]
         keep:
           trace: 2d
+  users.yaml: |
+    # leutik-tarik accounts. REPLACE the placeholder below with the real
+    # account: the real hash lives only in the git-ignored credential file,
+    # never in this public repository.
+    #
+    # Generate a hash: caddy hash-password --plaintext "..."  (or htpasswd -nB)
+    # Usernames may not contain '|' or newlines.
+    users:
+      example: $2b$10$Eyd1RWvbT06SuCr2xUMs8Ok/atKsGgKXH1V0cwvRFTCMXrH41yl7i  # password: changeme
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -70,6 +79,19 @@ spec:
   storageClassName: local-path
   resources:
     requests: {storage: 10Gi}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: leutik-auth
+  namespace: leutik-system
+  labels: {app.kubernetes.io/part-of: leutik-tarik}
+type: Opaque
+stringData:
+  # REPLACE both values. The real values live only in the git-ignored
+  # credential file, never in this public repository.
+  session-secret: CHANGE_ME_SESSION_SECRET
+  ingest-token: CHANGE_ME_INGEST_TOKEN
 ---
 apiVersion: v1
 kind: Service
@@ -141,6 +163,14 @@ spec:
               value: http://clickhouse:8123
             - name: LEUTIK_POLICY_PATH
               value: /etc/leutik/policy.yaml
+            - name: LEUTIK_USERS_PATH
+              value: /etc/leutik/users.yaml
+            - name: LEUTIK_SESSION_SECRET
+              valueFrom:
+                secretKeyRef: {name: leutik-auth, key: session-secret}
+            - name: LEUTIK_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef: {name: leutik-auth, key: ingest-token}
             - name: LEUTIK_PROFILES_DIR
               value: /var/lib/leutik/profiles
             # "Worth checking" thresholds, so the verdict is visible without

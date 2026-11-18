@@ -45,7 +45,7 @@ func (u UI) Services(w http.ResponseWriter, r *http.Request) {
 		totalSpans += s.Spans
 		totalErrors += s.Errors
 	}
-	render(w, servicesView, map[string]any{
+	render(w, r, servicesView, map[string]any{
 		"Title":       "Services",
 		"Rows":        rows,
 		"From":        from.Format(inputTimeLayout),
@@ -118,7 +118,7 @@ func (u UI) ServiceDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	render(w, serviceDetailView, map[string]any{
+	render(w, r, serviceDetailView, map[string]any{
 		"Title":      name,
 		"Service":    name,
 		"Stat":       stat,
@@ -153,7 +153,7 @@ func (u UI) Incidents(w http.ResponseWriter, r *http.Request) {
 			max = g.Count
 		}
 	}
-	render(w, incidentsView, map[string]any{
+	render(w, r, incidentsView, map[string]any{
 		"Title":   "Incidents",
 		"Groups":  groups,
 		"From":    from.Format(inputTimeLayout),

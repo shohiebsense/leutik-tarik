@@ -25,7 +25,7 @@ func (u UI) Profiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, profilesView, map[string]any{
+	render(w, r, profilesView, map[string]any{
 		"Title":    "Profiles",
 		"Profiles": list,
 		"Dir":      store.ProfilesDir(),
@@ -50,13 +50,13 @@ func (u UI) ProfileDetail(w http.ResponseWriter, r *http.Request) {
 	fg, err := buildFlamegraph(data, 1100)
 	if err != nil {
 		// A stored blob that cannot be parsed is shown, not hidden.
-		render(w, profileDetailView, map[string]any{
+		render(w, r, profileDetailView, map[string]any{
 			"Title": "Profile " + id, "Meta": meta,
 			"Error": err.Error(), "Flame": flamegraph{},
 		})
 		return
 	}
-	render(w, profileDetailView, map[string]any{
+	render(w, r, profileDetailView, map[string]any{
 		"Title": "Profile " + id, "Meta": meta, "Flame": fg,
 	})
 }

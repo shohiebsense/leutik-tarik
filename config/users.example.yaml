@@ -1,0 +1,17 @@
+# leutik-tarik accounts — EXAMPLE. Copy to config/users.yaml and edit.
+#
+# Passwords are bcrypt hashes, verified once per sign-in (not per request):
+# cost 10 keeps sign-in snappy while still resisting brute force on an internal
+# gate. Generate a hash with either of:
+#   caddy hash-password --plaintext "the password"
+#   htpasswd -nB <username>
+#
+# Usernames may not contain '|' or newlines. Deleting the file (or every
+# account) disables UI authentication; see the operator credential file.
+#
+# NOTE: this repository is public. The real accounts file (config/users.yaml)
+# is git-ignored, and the real values live only in the operator credential
+# file (also git-ignored). Never commit a real password hash here.
+users:
+  # Password for this example account is "changeme".
+  example: "$2b$10$Eyd1RWvbT06SuCr2xUMs8Ok/atKsGgKXH1V0cwvRFTCMXrH41yl7i"

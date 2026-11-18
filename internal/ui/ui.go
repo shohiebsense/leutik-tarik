@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/auth"
 	"github.com/shohiebsense/leutik-tarik/internal/ingest"
 	"github.com/shohiebsense/leutik-tarik/internal/model"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
@@ -41,13 +42,18 @@ func splitNameList(v string) map[string]bool {
 	return out
 }
 
-// viewerSeesRaw reports whether the caller is allowlisted to read raw values.
+// viewerSeesRaw reports whether the signed-in caller is allowlisted to read raw
+// values. Identity comes from the session (set by the auth middleware), not
+// from a proxy header: the platform authenticates its own viewers now.
 func viewerSeesRaw(r *http.Request) bool {
 	if len(revealUsers) == 0 {
 		return false
 	}
-	user := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Auth-User")))
-	return user != "" && revealUsers[user]
+	user, ok := auth.User(r.Context())
+	if !ok {
+		return false
+	}
+	return revealUsers[strings.ToLower(user)]
 }
 
 // UI serves the operations list and trace detail pages.
@@ -129,7 +135,7 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, operationsView, map[string]any{
+	render(w, r, operationsView, map[string]any{
 		"Strip":    strip,
 		"Title":    title,
 		"Service":  service,
@@ -139,6 +145,20 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"Outcomes": outcomes,
 		"From":     inDisplay(from).Format(inputTimeLayout),
 		"To":       inDisplay(to).Format(inputTimeLayout),
+	})
+}
+
+// LoginPage renders the sign-in form. It is the one page outside the auth
+// guard, so it has its own shell (no nav, no data).
+func (u UI) LoginPage(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.User(r.Context()); ok {
+		http.Redirect(w, r, "/operations", http.StatusFound)
+		return
+	}
+	render(w, r, loginView, map[string]any{
+		"Title": "Sign in",
+		"Next":  r.URL.Query().Get("next"),
+		"Error": r.URL.Query().Get("error") != "",
 	})
 }
 
@@ -168,7 +188,7 @@ func (u UI) PoliciesPage(w http.ResponseWriter, r *http.Request) {
 		matches[r.Name] = describeMatch(r.Match)
 	}
 
-	render(w, policiesView, map[string]any{
+	render(w, r, policiesView, map[string]any{
 		"Title":      "Policies",
 		"Policy":     p,
 		"Preview":    preview,
@@ -481,7 +501,7 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	headline, subtitle, req := traceHeadline(spans, traceID, showRaw)
-	render(w, traceView, map[string]any{
+	render(w, r, traceView, map[string]any{
 		"Details":     details,
 		"Title":       headline,
 		"Subtitle":    subtitle,
@@ -605,14 +625,19 @@ var (
 	profileDetailView = template.Must(template.Must(pageBase.Clone()).Parse(profileDetailTemplate))
 	traceView         = template.Must(template.Must(pageBase.Clone()).Parse(traceTemplate))
 	policiesView      = template.Must(template.Must(pageBase.Clone()).Parse(policiesTemplate))
+	loginView         = template.Must(template.New("page").Parse(loginTemplate))
 )
 
-func render(w http.ResponseWriter, t *template.Template, data map[string]any) {
+func render(w http.ResponseWriter, r *http.Request, t *template.Template, data map[string]any) {
 	if data == nil {
 		data = map[string]any{}
 	}
 	if _, ok := data["Zone"]; !ok {
 		data["Zone"] = displayZoneLabel
+	}
+	// The signed-in viewer's name, for the header. Absent when auth is off.
+	if user, ok := auth.User(r.Context()); ok {
+		data["User"] = user
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "page", data); err != nil {
@@ -638,6 +663,9 @@ html,body{margin:0;padding:0}
 .wordmark .dash{color:#b00020}
 .brandbar nav a{margin-right:1.1rem;text-decoration:none;color:#06c}
 .brandbar nav a:hover{text-decoration:underline}
+.who{margin-left:auto;display:inline-flex;align-items:center;gap:.5rem;font-size:.8rem;color:#555}
+.logoutform{display:inline;margin:0}
+.logoutform button{background:none;border:0;color:#06c;cursor:pointer;font:inherit;padding:0;text-decoration:underline}
 /* Whole-row links without JavaScript: the anchor stretches over its row. */
 tr.rowlink{position:relative}
 tr.rowlink:hover td{background:#f6f9fc}
@@ -753,6 +781,7 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
     <a href="/profiles">Profiles</a>
     <a href="/policies">Policies</a>
   </nav>
+  {{if .User}}<span class="who">{{.User}} · <form method="post" action="/logout" class="logoutform"><button type="submit">logout</button></form></span>{{end}}
 </header>
 <div class="pagetop">
   <div>
@@ -765,6 +794,54 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
 <div class="content">
 {{template "content" .}}
 </div>
+</div>
+</body>
+</html>{{end}}`
+
+const loginTemplate = `{{define "page"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — leutik-tarik</title>
+<style>
+html,body{margin:0;padding:0}
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;background:#fafafa;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.25rem;box-sizing:border-box}
+.card{width:100%;max-width:340px}
+.brand{display:inline-flex;align-items:center;gap:.45rem;text-decoration:none;color:#111;margin-bottom:1.1rem}
+.wordmark{font-weight:700;letter-spacing:-.01em;font-size:1.15rem}
+.wordmark .dash{color:#b00020}
+form{background:#fff;border:1px solid #e3e6e8;border-radius:8px;padding:1.25rem}
+label{display:block;font-size:.8rem;color:#555;margin:.6rem 0 .25rem}
+input{width:100%;box-sizing:border-box;padding:.5rem .6rem;border:1px solid #d0d5da;border-radius:5px;font-size:.95rem;font-family:inherit}
+input:focus{outline:2px solid #06c;border-color:#06c}
+button{margin-top:1rem;width:100%;padding:.55rem;background:#111;color:#fff;border:0;border-radius:5px;font-size:.95rem;font-weight:600;cursor:pointer}
+button:hover{background:#333}
+.error{background:#fdecef;color:#b00020;border:1px solid #f5c6cb;border-radius:5px;padding:.5rem .65rem;font-size:.85rem;margin-bottom:.75rem}
+.hint{font-size:.78rem;color:#777;margin-top:.9rem;line-height:1.45}
+</style>
+</head>
+<body>
+<div class="card">
+  <a class="brand" href="/operations" aria-label="leutik-tarik">
+    <svg width="24" height="24" viewBox="0 0 22 22" aria-hidden="true">
+      <rect x="1" y="9" width="3" height="4" rx="1" fill="#111"/>
+      <rect x="6" y="5" width="3" height="12" rx="1" fill="#111"/>
+      <rect x="11" y="2" width="3" height="18" rx="1" fill="#b00020"/>
+      <rect x="16" y="7" width="3" height="8" rx="1" fill="#111"/>
+    </svg>
+    <span class="wordmark">leutik<span class="dash">-</span>tarik</span>
+  </a>
+  <form method="post" action="/login">
+    {{if .Error}}<div class="error">Wrong username or password.</div>{{end}}
+    {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="hint">Credentials are in the operator credential file. Sessions last 30 days.</p>
 </div>
 </body>
 </html>{{end}}`

@@ -13,6 +13,7 @@ import (
 	"time"
 	_ "time/tzdata" // distroless has no tzdata; without this Asia/Jakarta silently becomes UTC
 
+	"github.com/shohiebsense/leutik-tarik/internal/auth"
 	"github.com/shohiebsense/leutik-tarik/internal/logsnap"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/server"
@@ -33,8 +34,9 @@ func main() {
 
 	st, label := pickStore()
 	policies := pickPolicy()
+	authOpt := pickAuth()
 
-	opts := server.Options{Store: st, Policies: policies}
+	opts := server.Options{Store: st, Policies: policies, Auth: authOpt}
 	if os.Getenv("LEUTIK_LOG_CAPTURE") != "off" {
 		opts.Logs = logsnap.NewRing(logsnap.Limits{})
 		opts.Trigger = logsnap.DefaultTrigger()
@@ -103,6 +105,35 @@ func pickPolicy() *policy.Engine {
 	log.Printf("policy %s loaded: version %d, %d rules, default trace retention %s",
 		path, p.Version, len(p.Rules), p.Defaults.Trace.Duration())
 	return policy.New(p)
+}
+
+// pickAuth loads accounts and builds the in-app auth gate. A missing users file
+// is not fatal (a fresh install has no accounts yet): authentication then stays
+// off, and the server runs as it always has. A present-but-broken file is
+// fatal, like a broken policy.
+func pickAuth() *auth.Auth {
+	path := os.Getenv("LEUTIK_USERS_PATH")
+	if path == "" {
+		path = "config/users.yaml"
+	}
+	accounts, err := auth.LoadAccounts(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("no users file at %s; authentication is OFF (set LEUTIK_USERS_PATH to enable)", path)
+			return nil
+		}
+		log.Fatalf("users %s: %v", path, err)
+	}
+	secret := os.Getenv("LEUTIK_SESSION_SECRET")
+	if secret == "" {
+		log.Printf("LEUTIK_SESSION_SECRET not set; sign-ins will not survive a restart")
+	}
+	token := os.Getenv("LEUTIK_INGEST_TOKEN")
+	if token == "" {
+		log.Printf("LEUTIK_INGEST_TOKEN not set; ingest is UNAUTHENTICATED")
+	}
+	log.Printf("auth on: accounts from %s (session cookie + ingest bearer token)", path)
+	return auth.New(accounts, auth.NewSession(secret), auth.NewIngest(token))
 }
 
 // pickStore uses ClickHouse when configured and the in-memory store otherwise,

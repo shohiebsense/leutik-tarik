@@ -78,6 +78,22 @@ Rules set retention per span at ingest (failures longest, high-volume reads
 shortest). `/policies` shows the effective config and what each rule would claim
 in the last 24h. See `docs/policies.md`.
 
+## Authentication
+
+The platform authenticates its own viewers (in-app, not at the edge):
+
+- **Browser** — `/login` form; a bcrypt password is checked once per sign-in,
+  then an HMAC-signed session cookie (30 days). Accounts live in a users file
+  (`LEUTIK_USERS_PATH`, default `config/users.yaml`; format in
+  `config/users.example.yaml`).
+- **Ingest** — `/v1/*` requires `Authorization: Bearer <token>` when
+  `LEUTIK_INGEST_TOKEN` is set; sessions are signed with `LEUTIK_SESSION_SECRET`.
+
+With no users file (and no ingest token) authentication is off, matching the
+earlier pre-auth behaviour. Deployment credentials are in the git-ignored
+credential file, never in this public repository — the committed manifest
+ships placeholders only.
+
 ## Kubernetes (this is how it runs on Jupler)
 
 ```sh

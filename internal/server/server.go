@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/auth"
 	"github.com/shohiebsense/leutik-tarik/internal/ingest"
 	"github.com/shohiebsense/leutik-tarik/internal/logsnap"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
@@ -16,6 +17,9 @@ import (
 type Options struct {
 	Store    store.Store
 	Policies *policy.Engine
+	// Auth guards the HTML routes with a session and the ingest routes with a
+	// bearer token. Nil disables authentication (the pre-auth behaviour).
+	Auth *auth.Auth
 	// Logs enables bounded log capture. Nil means logs are not accepted.
 	Logs    *logsnap.Ring
 	Trigger logsnap.Trigger
@@ -28,38 +32,60 @@ func New(s store.Store, policies *policy.Engine) http.Handler {
 	return NewWithOptions(Options{Store: s, Policies: policies})
 }
 
-// NewWithOptions is New with log capture configured.
+// NewWithOptions is New with log capture and authentication configured.
 func NewWithOptions(o Options) http.Handler {
 	s := o.Store
 	policies := o.Policies
 	if policies == nil {
 		policies = policy.Default()
 	}
+
+	a := o.Auth
+	requireUI := func(h http.HandlerFunc) http.HandlerFunc { return h }
+	requireIngest := func(h http.Handler) http.Handler { return h }
+	if a != nil {
+		requireUI = a.RequireUI
+		requireIngest = a.RequireIngest
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/v1/traces", ingest.Handler{
+	mux.Handle("/v1/traces", requireIngest(ingest.Handler{
 		Store: s, Policies: policies,
 		Logs: o.Logs, Trigger: o.Trigger, LogRetention: o.LogRetention,
-	})
+	}))
 	if o.Logs != nil {
-		mux.Handle("/v1/logs", ingest.LogsHandler{
+		mux.Handle("/v1/logs", requireIngest(ingest.LogsHandler{
 			Ring: o.Logs, Retention: o.LogRetention,
-		})
+		}))
 	}
 	u := ui.UI{Store: s, Policies: policies}
-	mux.HandleFunc("/policies", u.PoliciesPage)
-	mux.HandleFunc("/services", u.Services)
-	mux.HandleFunc("/services/{service}", u.ServiceDetail)
-	mux.HandleFunc("/incidents", u.Incidents)
-	mux.HandleFunc("/profiles", u.Profiles)
-	mux.HandleFunc("/profiles/{profileID}", u.ProfileDetail)
-	mux.Handle("/v1/profiles", ingest.ProfilesHandler{Store: s, MaxBodyBytes: 64 << 20})
-	mux.HandleFunc("/operations", u.Operations)
-	mux.HandleFunc("/operations/{service}", u.Operations)
-	mux.HandleFunc("/traces/{traceID}", u.Trace)
+	mux.HandleFunc("/policies", requireUI(u.PoliciesPage))
+	mux.HandleFunc("/services", requireUI(u.Services))
+	mux.HandleFunc("/services/{service}", requireUI(u.ServiceDetail))
+	mux.HandleFunc("/incidents", requireUI(u.Incidents))
+	mux.HandleFunc("/profiles", requireUI(u.Profiles))
+	mux.HandleFunc("/profiles/{profileID}", requireUI(u.ProfileDetail))
+	mux.Handle("/v1/profiles", requireIngest(ingest.ProfilesHandler{Store: s, MaxBodyBytes: 64 << 20}))
+	mux.HandleFunc("/operations", requireUI(u.Operations))
+	mux.HandleFunc("/operations/{service}", requireUI(u.Operations))
+	mux.HandleFunc("/traces/{traceID}", requireUI(u.Trace))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+
+	// Sign-in and sign-out exist only when authentication is on. With no
+	// accounts loaded, /login just goes home.
+	if a != nil && a.Enabled() {
+		mux.HandleFunc("GET /login", u.LoginPage)
+		mux.HandleFunc("POST /login", a.LoginPOST)
+		mux.HandleFunc("POST /logout", a.Logout)
+	} else {
+		mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/operations", http.StatusFound)
+		})
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

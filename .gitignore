@@ -8,6 +8,7 @@
 # local config and secrets
 .env
 /config/policy.yaml
+/config/users.yaml
 *.local.yaml
 /config.local.yaml
 
