@@ -7,14 +7,48 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/shohiebsense/leutik-tarik/internal/ingest"
 	"github.com/shohiebsense/leutik-tarik/internal/model"
 	"github.com/shohiebsense/leutik-tarik/internal/policy"
 	"github.com/shohiebsense/leutik-tarik/internal/store"
 )
+
+// revealUsers is the allowlist of Leutik-Tarik VIEWERS who see raw values.
+//
+// The gate is the ingress basic-auth user, forwarded as X-Auth-User by Caddy. It
+// is deliberately keyed on the viewer, not on the account a trace belongs to: an
+// operator wants their own view unmasked regardless of which customer the request
+// was about. Empty allowlist = everyone sees redacted values.
+var revealUsers = func() map[string]bool {
+	if v := os.Getenv("LEUTIK_REVEAL_USERS"); v != "" {
+		return splitNameList(v)
+	}
+	return map[string]bool{"shohieb": true} // the operator account, by default
+}()
+
+func splitNameList(v string) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+// viewerSeesRaw reports whether the caller is allowlisted to read raw values.
+func viewerSeesRaw(r *http.Request) bool {
+	if len(revealUsers) == 0 {
+		return false
+	}
+	user := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Auth-User")))
+	return user != "" && revealUsers[user]
+}
 
 // UI serves the operations list and trace detail pages.
 type UI struct {
@@ -177,7 +211,7 @@ type traceRow struct {
 // traceHeadline describes the operation in the terms a person asked the
 // question in: the HTTP request, not a 32-character trace id. The id stays, as a
 // subtitle instead of the title.
-func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, req *traceRequest) {
+func traceHeadline(spans []model.Span, traceID string, showRaw bool) (title, subtitle string, req *traceRequest) {
 	var root model.Span
 	found := false
 	for _, s := range spans {
@@ -208,7 +242,7 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 		Phone:     root.Attributes["enduser.phone_number"],
 		Payload:   root.Attributes["http.request.body"],
 		HasBody:   root.Attributes["http.request.body"] != "",
-		Headers:   requestHeaders(root.Attributes),
+		Headers:   requestHeaders(root.Attributes, showRaw),
 		UserAgent: root.Attributes["user_agent.original"],
 		Service:   root.ServiceName,
 	}
@@ -258,7 +292,11 @@ func firstNonEmpty(vals ...string) string {
 
 // requestHeaders pulls the captured headers out of the span attributes, sorted,
 // and skips the ones already shown in the strip.
-func requestHeaders(attrs map[string]string) []attrRow {
+func requestHeaders(raw map[string]string, showRaw bool) []attrRow {
+	attrs := raw
+	if !showRaw {
+		attrs = ingest.RedactCopy(raw)
+	}
 	skip := map[string]bool{"host": true}
 	var out []attrRow
 	for k, v := range attrs {
@@ -294,11 +332,15 @@ func prettyPayload(s string) string {
 }
 
 // payloadFor returns the pretty-printed payload, or "" when there is none.
-func payloadFor(req *traceRequest) string {
+func payloadFor(req *traceRequest, showRaw bool) string {
 	if req == nil || req.Payload == "" {
 		return ""
 	}
-	return prettyPayload(req.Payload)
+	body := req.Payload
+	if !showRaw {
+		body = ingest.RedactCopy(map[string]string{"http.request.body": body})["http.request.body"]
+	}
+	return prettyPayload(body)
 }
 
 // traceStamp is the top-right block: when it started, in the display zone.
@@ -413,6 +455,7 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 		rows[i].TreeHTML = treeHTML(rows[i].Depth, displayName(rows[i].Span))
 	}
 
+	showRaw := viewerSeesRaw(r)
 	var details []spanDetail
 	for _, row := range rows {
 		keys := make([]string, 0, len(row.Span.Attributes))
@@ -427,20 +470,25 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			Outcome:  row.Span.Outcome,
 			Duration: policy.HumanDuration(row.Span.Duration),
 		}
+		attrs := row.Span.Attributes
+		if !showRaw {
+			attrs = ingest.RedactCopy(attrs)
+		}
 		for _, k := range keys {
-			d.Rows = append(d.Rows, attrRow{Key: k, Value: row.Span.Attributes[k]})
+			d.Rows = append(d.Rows, attrRow{Key: k, Value: attrs[k]})
 		}
 		details = append(details, d)
 	}
 
-	headline, subtitle, req := traceHeadline(spans, traceID)
+	headline, subtitle, req := traceHeadline(spans, traceID, showRaw)
 	render(w, traceView, map[string]any{
 		"Details":     details,
 		"Title":       headline,
 		"Subtitle":    subtitle,
 		"HeaderRight": traceStamp(summary, spans[0]),
 		"Request":     req,
-		"Payload":     payloadFor(req),
+		"Payload":     payloadFor(req, showRaw),
+		"ShowRaw":     showRaw,
 		"TraceID":     traceID,
 		"Rows":        rows,
 		"Summary":     summary,
@@ -640,6 +688,7 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:.1rem 0 .8rem}
+.rawon{color:#8a5b00;font-weight:600}
 .pagetop{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap}
 .pagetop h1{margin:.2rem 0 .25rem}
 .sub{margin:0;font-size:.85rem;color:#555}
@@ -712,7 +761,7 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
   </div>
   {{if .HeaderRight}}<div class="topright">{{.HeaderRight}}</div>{{end}}
 </div>
-<p class="zone" id="zone">All times shown in {{.Zone}}{{if .Service}} · scoped to {{.Service}} — <a href="/operations">show all services</a>{{end}}</p>
+<p class="zone" id="zone">All times shown in {{.Zone}}{{if .Service}} · scoped to {{.Service}} — <a href="/operations">show all services</a>{{end}}{{if .ShowRaw}} · <span class="rawon">raw values visible — your account is allowlisted</span>{{end}}</p>
 <div class="content">
 {{template "content" .}}
 </div>

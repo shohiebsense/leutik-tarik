@@ -36,7 +36,12 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 			continue
 		}
 
-		redacted := redact(r.attrs)
+		// Ingest only destroys values when a production deployment asks for it;
+		// otherwise the viewer's identity decides what they see.
+		redacted := 0
+		if redactionEnabled {
+			redacted = redact(r.attrs)
+		}
 		stats.redacted += redacted
 
 		statusCode := intOf(r.attrs, "http.response.status_code", "http.status_code")
@@ -269,8 +274,11 @@ var CaptureSQL = os.Getenv("LEUTIK_CAPTURE_SQL_TEXT") == "on"
 // customer the request belongs to. Every test using a different account therefore
 // stayed masked, which looked like flakiness but was the rule firing as written.
 //
-// LEUTIK_REDACT=off stores bodies and headers as received. Default on.
-var redactionEnabled = os.Getenv("LEUTIK_REDACT") != "off"
+// Ingest stores values as received so an allowlisted VIEWER can read them; the
+// redaction decision belongs to whoever is looking, not to the platform. A
+// production deployment sets LEUTIK_REDACT=on to destroy the values at write time
+// instead, accepting that nobody can read them afterwards.
+var redactionEnabled = os.Getenv("LEUTIK_REDACT") == "on"
 
 func splitList(v string) map[string]bool {
 	out := map[string]bool{}
@@ -309,15 +317,10 @@ const redactedPlaceholder = "[REDACTED]"
 
 // redact blanks sensitive attribute values in place and returns how many it
 // changed.
+// redact always scrubs. Render-time redaction (RedactCopy) depends on it being
+// unconditional, so the ingest-time switch is applied by the caller below and
+// never inside this function.
 func redact(attrs map[string]string) int {
-	// Redaction off (a dev deployment): store what was received. The captured
-	// headers are the ones the CALLER sent to the traced service - a customer
-	// token, an admin basic-auth pair, a service token - never leutik-tarik's own
-	// ingress credential, which does not appear in a span.
-	if !redactionEnabled {
-		return 0
-	}
-
 	n := 0
 	// A captured payload is kept, but the credentials inside it are not.
 	if body, ok := attrs["http.request.body"]; ok && body != "" {
@@ -406,4 +409,17 @@ func scrubBearer(v string) (string, bool) {
 		return v, false
 	}
 	return v[:i] + "Bearer " + redactedPlaceholder, true
+}
+
+// RedactCopy returns a redacted copy of an attribute map, leaving the original
+// untouched. The UI calls it per request: what a viewer sees depends on who they
+// are, so redaction cannot be baked into storage for a deployment where an
+// allowlisted operator needs the raw values.
+func RedactCopy(attrs map[string]string) map[string]string {
+	out := make(map[string]string, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	redact(out)
+	return out
 }

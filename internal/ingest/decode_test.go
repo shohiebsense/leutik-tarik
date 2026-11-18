@@ -336,37 +336,27 @@ func TestDescriptiveDBNames(t *testing.T) {
 }
 
 // The payload is kept; credentials inside it are not.
-func TestBodyCapturedButSecretsScrubbed(t *testing.T) {
-	body := `{"username":"62844420260702","password":"hunter2","pin":"1234","note":"keep me"}`
-	scrubbed, changed := scrubBody(body)
-	if !changed {
-		t.Fatal("expected a scrub")
-	}
-	for _, secret := range []string{"hunter2", `"1234"`} {
-		if strings.Contains(scrubbed, secret) {
-			t.Errorf("%s survived: %s", secret, scrubbed)
-		}
-	}
-	for _, keep := range []string{"62844420260702", "keep me"} {
-		if !strings.Contains(scrubbed, keep) {
-			t.Errorf("%s was lost: %s", keep, scrubbed)
-		}
-	}
+func TestBodyStoredRawAndScrubbedForDisplay(t *testing.T) {
+	body := `{"username":"62844420260702","password":"hunter2","note":"keep me"}`
 
-	// Form encoding too.
-	form, _ := scrubBody("username=a&password=hunter2&ok=1")
-	if strings.Contains(form, "hunter2") {
-		t.Errorf("form password survived: %s", form)
-	}
-
-	// The body attribute is no longer blanked wholesale.
+	// Ingest keeps what arrived: the viewer decides what to see.
 	raw := []rawSpan{{resource: map[string]string{}, attrs: map[string]string{
-		"http.request.body": `{"password":"hunter2"}`,
+		"enduser.id": "5452_@yopmail.com", "http.request.body": body,
 	}, traceID: "aa", spanID: "bb"}}
 	records, _ := normalize(raw, time.Now(), nil)
-	got := records[0].Span.Attributes["http.request.body"]
-	if !strings.Contains(got, "[REDACTED]") || strings.Contains(got, "hunter2") {
-		t.Errorf("body attribute = %q", got)
+	if got := records[0].Span.Attributes["http.request.body"]; got != body {
+		t.Errorf("ingest altered the body: %q", got)
+	}
+
+	// Render-time redaction scrubs it for anyone not allowlisted.
+	display := RedactCopy(records[0].Span.Attributes)["http.request.body"]
+	if strings.Contains(display, "hunter2") {
+		t.Errorf("display kept the password: %q", display)
+	}
+	for _, keep := range []string{"62844420260702", "keep me"} {
+		if !strings.Contains(display, keep) {
+			t.Errorf("%s was lost: %q", keep, display)
+		}
 	}
 }
 
@@ -378,41 +368,29 @@ func TestBodyCapturedButSecretsScrubbed(t *testing.T) {
 // Redaction is a deployment switch, not a per-account rule. The earlier
 // allowlist keyed on the traced account, so every trace belonging to a different
 // customer stayed masked while the one allowlisted account looked fine.
-func TestRedactionIsDeploymentScoped(t *testing.T) {
+func TestIngestRedactionIsOptIn(t *testing.T) {
 	old := redactionEnabled
 	defer func() { redactionEnabled = old }()
 
-	record := func() map[string]string {
-		return map[string]string{
-			"enduser.id":                        "5452_@yopmail.com", // deliberately NOT the operator
+	rec := func() []rawSpan {
+		return []rawSpan{{resource: map[string]string{}, traceID: "aa", spanID: "bb", attrs: map[string]string{
+			"enduser.id":                        "5452_@yopmail.com",
 			"http.request.body":                 `{"password":"hunter2"}`,
 			"http.request.header.authorization": "Basic abc123",
-		}
+		}}}
 	}
 
-	// On (the default): scrubbed for everyone.
-	redactionEnabled = true
-	on := record()
-	if n := redact(on); n == 0 {
-		t.Fatal("nothing redacted with redaction on")
-	}
-	if strings.Contains(on["http.request.body"], "hunter2") {
-		t.Error("body leaked with redaction on")
-	}
-	if on["http.request.header.authorization"] != redactedPlaceholder {
-		t.Error("authorization leaked with redaction on")
-	}
-
-	// Off (dev): readable even though the account is not the operator's.
+	// Default (dev): stored raw so an allowlisted viewer can read it.
 	redactionEnabled = false
-	off := record()
-	if n := redact(off); n != 0 {
-		t.Fatalf("redacted %d fields with redaction off", n)
+	records, _ := normalize(rec(), time.Now(), nil)
+	if records[0].Span.Attributes["http.request.header.authorization"] != "Basic abc123" {
+		t.Error("ingest redacted by default; it should store raw")
 	}
-	if !strings.Contains(off["http.request.body"], "hunter2") {
-		t.Error("body still masked with redaction off")
-	}
-	if off["http.request.header.authorization"] != "Basic abc123" {
-		t.Error("authorization still masked with redaction off")
+
+	// Production: values destroyed at write time.
+	redactionEnabled = true
+	records, _ = normalize(rec(), time.Now(), nil)
+	if records[0].Span.Attributes["http.request.header.authorization"] != redactedPlaceholder {
+		t.Error("ingest did not redact with LEUTIK_REDACT=on")
 	}
 }

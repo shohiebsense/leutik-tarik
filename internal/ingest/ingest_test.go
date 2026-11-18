@@ -159,25 +159,6 @@ func TestIngestRejectsGzipBomb(t *testing.T) {
 	}
 }
 
-func TestIngestRedactsBeforeStore(t *testing.T) {
-	h, s := newHandler()
-	body := `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"auth"}}]},"scopeSpans":[{"spans":[{"traceId":"ee","spanId":"ff","name":"POST /login","kind":2,"startTimeUnixNano":"1000000000","endTimeUnixNano":"2000000000","attributes":[{"key":"http.request.header.authorization","value":{"stringValue":"Basic hunter2"}},{"key":"http.route","value":{"stringValue":"/login"}}]}]}]}]}`
-	r := httptest.NewRequest(http.MethodPost, "/v1/traces", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	h.ServeHTTP(httptest.NewRecorder(), r)
-
-	spans, err := s.GetTrace(context.Background(), "ee")
-	if err != nil || len(spans) != 1 {
-		t.Fatalf("trace = %d spans, err=%v", len(spans), err)
-	}
-	if got := spans[0].Attributes["http.request.header.authorization"]; got != "[REDACTED]" {
-		t.Errorf("stored credential = %q, want redacted", got)
-	}
-	if spans[0].HTTPRoute != "/login" {
-		t.Errorf("route = %q", spans[0].HTTPRoute)
-	}
-}
-
 func TestIngestRejectsOversizedAttributeNames(t *testing.T) {
 	// Guard the attribute map itself, not only the body.
 	h, _ := newHandler()
