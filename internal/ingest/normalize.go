@@ -322,10 +322,20 @@ const redactedPlaceholder = "[REDACTED]"
 // redact blanks sensitive attribute values in place and returns how many it
 // changed.
 func redact(attrs map[string]string) int {
+	// An allowlisted account keeps its record readable in full: body fields and
+	// request headers, including Authorization.
+	//
+	// Scope note, because it was previously stated wrongly: the headers captured
+	// here are the ones the CALLER sent to the traced service (a customer token,
+	// an admin basic-auth pair, a service token). They are not leutik-tarik's own
+	// ingress credential, which never appears in a span.
+	if revealsBody(attrs) {
+		return 0
+	}
+
 	n := 0
-	// A captured payload is kept, but the credentials inside it are not - unless
-	// this account is explicitly allowlisted for readable bodies.
-	if body, ok := attrs["http.request.body"]; ok && body != "" && !revealsBody(attrs) {
+	// A captured payload is kept, but the credentials inside it are not.
+	if body, ok := attrs["http.request.body"]; ok && body != "" {
 		if scrubbed, changed := scrubBody(body); changed {
 			attrs["http.request.body"] = scrubbed
 			n++

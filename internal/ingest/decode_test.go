@@ -397,3 +397,35 @@ func TestRevealBodyAllowlist(t *testing.T) {
 		t.Errorf("non-allowlisted body leaked: %q", other["http.request.body"])
 	}
 }
+
+// The allowlisted account's record is readable end to end, including the
+// Authorization header the caller sent to the traced service.
+func TestRevealCoversHeaders(t *testing.T) {
+	old := revealBodyFor
+	defer func() { revealBodyFor = old }()
+	revealBodyFor = map[string]bool{"shohieb": true}
+
+	attrs := map[string]string{
+		"enduser.id":                        "shohieb",
+		"http.request.header.authorization": "Basic c2hvaGllYjoxMTExMTE=",
+		"http.request.header.cookie":        "sid=abc",
+		"http.request.body":                 `{"password":"111111"}`,
+		"error.type":                        "x",
+	}
+	if n := redact(attrs); n != 0 {
+		t.Errorf("redacted %d fields for an allowlisted account", n)
+	}
+	if attrs["http.request.header.authorization"] == redactedPlaceholder {
+		t.Error("authorization header was redacted for the allowlisted account")
+	}
+
+	// A different account keeps everything scrubbed.
+	other := map[string]string{
+		"enduser.id":                        "someone",
+		"http.request.header.authorization": "Basic c2hvaGllYjoxMTExMTE=",
+	}
+	redact(other)
+	if other["http.request.header.authorization"] != redactedPlaceholder {
+		t.Error("authorization leaked for a non-allowlisted account")
+	}
+}
