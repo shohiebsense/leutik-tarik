@@ -92,8 +92,12 @@ func (u UI) clock() time.Time {
 const refreshSeconds = 60
 
 // livePollSeconds is how often a live window updates in place when JavaScript
-// is available. Short, because an in-place swap costs the reader nothing.
-const livePollSeconds = 15
+// is available. Deliberately a poll rather than a stream: a long-lived
+// connection would make the UI stateful, and this platform scales by adding
+// stateless replicas. At 5s the query (60ms) costs about 0.7s of database CPU
+// per minute per viewer, which is nothing, and the reader still sees a new
+// request within a few seconds.
+const livePollSeconds = 5
 
 // defaultWindow is the rolling window a bare /operations asks for.
 const defaultWindow = 15 * time.Minute

@@ -34,7 +34,7 @@ func TestOperationsDefaultWindowIsLive(t *testing.T) {
 	if !strings.Contains(body, `<noscript><meta http-equiv="refresh" content="60"></noscript>`) {
 		t.Error("live page carries no noscript refresh fallback")
 	}
-	if !strings.Contains(body, `data-live-url=`) || !strings.Contains(body, `data-live-interval="15"`) {
+	if !strings.Contains(body, `data-live-url=`) || !strings.Contains(body, `data-live-interval="5"`) {
 		t.Error("live page does not expose a poll target")
 	}
 	if !strings.Contains(body, `15m window`) {
