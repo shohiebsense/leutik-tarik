@@ -156,6 +156,11 @@ spec:
             # but treat this store as sensitive data. Set to "off" to redact SQL.
             - name: LEUTIK_CAPTURE_SQL_TEXT
               value: "on"
+            # Dev account whose own test payloads are stored readable. Everyone
+            # else's body keeps credential fields scrubbed, and Authorization /
+            # cookie headers are always redacted.
+            - name: LEUTIK_REVEAL_BODY_FOR
+              value: "shohieb"
             # Display zone for every time in the UI (storage stays UTC). There is
             # no JavaScript here, so the browser's zone cannot be read; this is
             # the deployment's zone, and the page always labels it.

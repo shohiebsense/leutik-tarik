@@ -369,3 +369,31 @@ func TestBodyCapturedButSecretsScrubbed(t *testing.T) {
 		t.Errorf("body attribute = %q", got)
 	}
 }
+
+// An allowlisted account's own test payload is more useful readable than
+// scrubbed; everyone else's stays scrubbed.
+func TestRevealBodyAllowlist(t *testing.T) {
+	old := revealBodyFor
+	defer func() { revealBodyFor = old }()
+
+	body := `{"username":"shohieb","password":"hunter2"}`
+
+	revealBodyFor = map[string]bool{}
+	if out, _ := scrubBody(body); strings.Contains(out, "hunter2") {
+		t.Fatal("scrubbing disabled by default")
+	}
+
+	revealBodyFor = map[string]bool{"shohieb": true}
+	attrs := map[string]string{"enduser.id": "shohieb", "http.request.body": body}
+	redact(attrs)
+	if !strings.Contains(attrs["http.request.body"], "hunter2") {
+		t.Errorf("allowlisted body still scrubbed: %q", attrs["http.request.body"])
+	}
+
+	// A different account is still scrubbed.
+	other := map[string]string{"enduser.id": "someone-else", "http.request.body": body}
+	redact(other)
+	if strings.Contains(other["http.request.body"], "hunter2") {
+		t.Errorf("non-allowlisted body leaked: %q", other["http.request.body"])
+	}
+}

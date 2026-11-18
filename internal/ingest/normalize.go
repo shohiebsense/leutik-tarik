@@ -261,6 +261,39 @@ var sqlTextKeys = []string{"db.query.text", "db.statement"}
 // CaptureSQL keeps statement text. Off by default: safe unless asked.
 var CaptureSQL = os.Getenv("LEUTIK_CAPTURE_SQL_TEXT") == "on"
 
+// revealBodyFor is a comma-separated allowlist of accounts whose request bodies
+// are stored unscrubbed. Empty by default: the safe behaviour is to scrub.
+//
+// It exists because a development account's own test payloads are more useful
+// readable than scrubbed. It does NOT unredact Authorization/cookie headers:
+// those hold the platform's own ingress credential, and writing them into the
+// trace store is what leaked a password before.
+var revealBodyFor = splitList(os.Getenv("LEUTIK_REVEAL_BODY_FOR"))
+
+func splitList(v string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out[strings.ToLower(p)] = true
+		}
+	}
+	return out
+}
+
+// revealsBody reports whether this record's account is allowed to skip body
+// scrubbing.
+func revealsBody(attrs map[string]string) bool {
+	if len(revealBodyFor) == 0 {
+		return false
+	}
+	for _, key := range []string{"enduser.id", "enduser.email", "enduser.phone_number"} {
+		if revealBodyFor[strings.ToLower(strings.TrimSpace(attrs[key]))] {
+			return true
+		}
+	}
+	return false
+}
+
 // sensitiveKeyPrefixes catch families, e.g. db.query.parameter.0.
 var sensitiveKeyPrefixes = []string{
 	"db.query.parameter.",
@@ -290,8 +323,9 @@ const redactedPlaceholder = "[REDACTED]"
 // changed.
 func redact(attrs map[string]string) int {
 	n := 0
-	// A captured payload is kept, but the credentials inside it are not.
-	if body, ok := attrs["http.request.body"]; ok && body != "" {
+	// A captured payload is kept, but the credentials inside it are not - unless
+	// this account is explicitly allowlisted for readable bodies.
+	if body, ok := attrs["http.request.body"]; ok && body != "" && !revealsBody(attrs) {
 		if scrubbed, changed := scrubBody(body); changed {
 			attrs["http.request.body"] = scrubbed
 			n++
