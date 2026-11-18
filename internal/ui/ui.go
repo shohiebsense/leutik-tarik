@@ -1026,7 +1026,6 @@ const operationsTemplate = `{{define "content"}}
   </td>
   <td>{{dur .Duration}}</td>
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{else if or (eq .Outcome "success") (eq .Outcome "ok")}}good{{end}}">{{.Outcome}}</td>
-  <td><a href="/traces/{{.TraceID}}">trace</a></td>
 </tr>
 {{else}}
 <tr><td colspan="4" class="dim">No operations in this window.</td></tr>
