@@ -261,14 +261,16 @@ var sqlTextKeys = []string{"db.query.text", "db.statement"}
 // CaptureSQL keeps statement text. Off by default: safe unless asked.
 var CaptureSQL = os.Getenv("LEUTIK_CAPTURE_SQL_TEXT") == "on"
 
-// revealBodyFor is a comma-separated allowlist of accounts whose request bodies
-// are stored unscrubbed. Empty by default: the safe behaviour is to scrub.
+// Redaction is a deployment decision, not a per-account one.
 //
-// It exists because a development account's own test payloads are more useful
-// readable than scrubbed. It does NOT unredact Authorization/cookie headers:
-// those hold the platform's own ingress credential, and writing them into the
-// trace store is what leaked a password before.
-var revealBodyFor = splitList(os.Getenv("LEUTIK_REVEAL_BODY_FOR"))
+// The first version allowlisted accounts (LEUTIK_REVEAL_BODY_FOR=shohieb) and
+// keyed on the account of the TRACED request. That was the wrong axis: an
+// operator looking at traces wants their own view unmasked, regardless of which
+// customer the request belongs to. Every test using a different account therefore
+// stayed masked, which looked like flakiness but was the rule firing as written.
+//
+// LEUTIK_REDACT=off stores bodies and headers as received. Default on.
+var redactionEnabled = os.Getenv("LEUTIK_REDACT") != "off"
 
 func splitList(v string) map[string]bool {
 	out := map[string]bool{}
@@ -278,20 +280,6 @@ func splitList(v string) map[string]bool {
 		}
 	}
 	return out
-}
-
-// revealsBody reports whether this record's account is allowed to skip body
-// scrubbing.
-func revealsBody(attrs map[string]string) bool {
-	if len(revealBodyFor) == 0 {
-		return false
-	}
-	for _, key := range []string{"enduser.id", "enduser.email", "enduser.phone_number"} {
-		if revealBodyFor[strings.ToLower(strings.TrimSpace(attrs[key]))] {
-			return true
-		}
-	}
-	return false
 }
 
 // sensitiveKeyPrefixes catch families, e.g. db.query.parameter.0.
@@ -322,14 +310,11 @@ const redactedPlaceholder = "[REDACTED]"
 // redact blanks sensitive attribute values in place and returns how many it
 // changed.
 func redact(attrs map[string]string) int {
-	// An allowlisted account keeps its record readable in full: body fields and
-	// request headers, including Authorization.
-	//
-	// Scope note, because it was previously stated wrongly: the headers captured
-	// here are the ones the CALLER sent to the traced service (a customer token,
-	// an admin basic-auth pair, a service token). They are not leutik-tarik's own
-	// ingress credential, which never appears in a span.
-	if revealsBody(attrs) {
+	// Redaction off (a dev deployment): store what was received. The captured
+	// headers are the ones the CALLER sent to the traced service - a customer
+	// token, an admin basic-auth pair, a service token - never leutik-tarik's own
+	// ingress credential, which does not appear in a span.
+	if !redactionEnabled {
 		return 0
 	}
 
