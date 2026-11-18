@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,12 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 		}
 
 		redacted := redact(r.attrs)
+		if body, ok := r.attrs["http.request.body"]; ok && body != "" {
+			if scrubbed, changed := scrubBody(body); changed {
+				r.attrs["http.request.body"] = scrubbed
+				redacted++
+			}
+		}
 		stats.redacted += redacted
 
 		statusCode := intOf(r.attrs, "http.response.status_code", "http.status_code")
@@ -248,7 +255,6 @@ func outcome(statusCode, otlpStatus int) string {
 var sensitiveAttrKeys = []string{
 	"db.query.parameter",
 	"db.statement.parameter",
-	"http.request.body",
 	"http.response.body",
 }
 
@@ -330,6 +336,36 @@ func isSensitive(key string) bool {
 		}
 	}
 	return false
+}
+
+// bodySecretFields are JSON/form field names whose VALUES are replaced inside a
+// captured request body. The body itself is kept: it is the point of capturing it.
+var bodySecretFields = []string{
+	"password", "passwd", "pin", "otp", "token", "access_token", "refresh_token",
+	"secret", "client_secret", "authorization", "api_key", "apikey",
+}
+
+// scrubBody redacts credential *values* inside a captured payload while leaving
+// the shape of the request readable. It is deliberately crude - a regex over
+// "field": "value" and field=value - because the alternative is a JSON parser
+// that fails on the truncated or non-JSON bodies we also receive.
+func scrubBody(body string) (string, bool) {
+	changed := false
+	for _, f := range bodySecretFields {
+		// "field": "value"  /  "field":"value"
+		re := regexp.MustCompile(`(?i)("` + f + `"\s*:\s*)"[^"]*"`)
+		if re.MatchString(body) {
+			body = re.ReplaceAllString(body, `$1"[REDACTED]"`)
+			changed = true
+		}
+		// field=value in form encoding
+		reForm := regexp.MustCompile(`(?i)(\b` + f + `=)[^&\s]*`)
+		if reForm.MatchString(body) {
+			body = reForm.ReplaceAllString(body, `${1}[REDACTED]`)
+			changed = true
+		}
+	}
+	return body, changed
 }
 
 // scrubBearer catches credentials that arrive in a non-sensitive key, e.g.

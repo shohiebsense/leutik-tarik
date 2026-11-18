@@ -333,3 +333,38 @@ func TestDescriptiveDBNames(t *testing.T) {
 		t.Errorf("long name not truncated: %q", long)
 	}
 }
+
+// The payload is kept; credentials inside it are not.
+func TestBodyCapturedButSecretsScrubbed(t *testing.T) {
+	body := `{"username":"62844420260702","password":"hunter2","pin":"1234","note":"keep me"}`
+	scrubbed, changed := scrubBody(body)
+	if !changed {
+		t.Fatal("expected a scrub")
+	}
+	for _, secret := range []string{"hunter2", `"1234"`} {
+		if strings.Contains(scrubbed, secret) {
+			t.Errorf("%s survived: %s", secret, scrubbed)
+		}
+	}
+	for _, keep := range []string{"62844420260702", "keep me"} {
+		if !strings.Contains(scrubbed, keep) {
+			t.Errorf("%s was lost: %s", keep, scrubbed)
+		}
+	}
+
+	// Form encoding too.
+	form, _ := scrubBody("username=a&password=hunter2&ok=1")
+	if strings.Contains(form, "hunter2") {
+		t.Errorf("form password survived: %s", form)
+	}
+
+	// The body attribute is no longer blanked wholesale.
+	raw := []rawSpan{{resource: map[string]string{}, attrs: map[string]string{
+		"http.request.body": `{"password":"hunter2"}`,
+	}, traceID: "aa", spanID: "bb"}}
+	records, _ := normalize(raw, time.Now(), nil)
+	got := records[0].Span.Attributes["http.request.body"]
+	if !strings.Contains(got, "[REDACTED]") || strings.Contains(got, "hunter2") {
+		t.Errorf("body attribute = %q", got)
+	}
+}

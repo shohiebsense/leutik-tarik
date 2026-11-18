@@ -2,6 +2,8 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -191,7 +193,11 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 		Target:    root.Attributes["http.target"],
 		Status:    root.StatusCode,
 		ClientIP:  root.Attributes["http.client_ip"],
-		Identity:  root.Attributes["enduser.pseudo.id"],
+		Identity:  firstNonEmpty(root.Attributes["enduser.id"], root.Attributes["enduser.pseudo.id"]),
+		Email:     root.Attributes["enduser.email"],
+		Phone:     root.Attributes["enduser.phone_number"],
+		Payload:   root.Attributes["http.request.body"],
+		Headers:   requestHeaders(root.Attributes),
 		UserAgent: root.Attributes["user_agent.original"],
 		Service:   root.ServiceName,
 	}
@@ -203,8 +209,14 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 
 // traceRequest is the request metadata shown above the waterfall.
 type traceRequest struct {
-	// Identity is the masked account this request was about (enduser.pseudo.id).
-	Identity  string
+	// Identity is the account this request was about (enduser.id).
+	Identity string
+	Email    string
+	Phone    string
+	// Payload is the captured request body, already scrubbed at ingest.
+	Payload string
+	// Headers are the incoming HTTP headers, minus the ones already shown.
+	Headers   []attrRow
 	Method    string
 	Route     string
 	Target    string
@@ -212,6 +224,61 @@ type traceRequest struct {
 	ClientIP  string
 	UserAgent string
 	Service   string
+}
+
+// firstNonEmpty returns the first non-empty value.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// requestHeaders pulls the captured headers out of the span attributes, sorted,
+// and skips the ones already shown in the strip.
+func requestHeaders(attrs map[string]string) []attrRow {
+	skip := map[string]bool{"host": true}
+	var out []attrRow
+	for k, v := range attrs {
+		const p = "http.request.header."
+		if len(k) <= len(p) || k[:len(p)] != p {
+			continue
+		}
+		name := k[len(p):]
+		if skip[name] {
+			continue
+		}
+		out = append(out, attrRow{Key: name, Value: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+// prettyPayload indents JSON so a payload is readable instead of one long line.
+func prettyPayload(s string) string {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(s, "…[truncated]"))
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return s
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(trimmed), "", "  "); err != nil {
+		return s
+	}
+	out := buf.String()
+	if strings.HasSuffix(s, "…[truncated]") {
+		out += "…[truncated]"
+	}
+	return out
+}
+
+// payloadFor returns the pretty-printed payload, or "" when there is none.
+func payloadFor(req *traceRequest) string {
+	if req == nil || req.Payload == "" {
+		return ""
+	}
+	return prettyPayload(req.Payload)
 }
 
 // traceStamp is the top-right block: when it started, in the display zone.
@@ -353,6 +420,7 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 		"Subtitle":    subtitle,
 		"HeaderRight": traceStamp(summary, spans[0]),
 		"Request":     req,
+		"Payload":     payloadFor(req),
 		"TraceID":     traceID,
 		"Rows":        rows,
 		"Summary":     summary,
@@ -513,6 +581,15 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .dim{color:#666}
 .reqstrip{margin:.2rem 0 .6rem;min-width:0}
 .reqstrip td{border:0;padding:.1rem 1.2rem .1rem 0;vertical-align:top}
+.payload{margin:.4rem 0 .8rem}
+.payload .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#888;margin-bottom:.15rem}
+.payload pre{
+  margin:0;padding:.6rem .75rem;background:#f7f8f9;border:1px solid #e3e6e8;border-radius:4px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem;line-height:1.45;
+  overflow-x:auto;max-height:22rem;
+}
+.headers{margin:.2rem 0 .8rem;font-size:.85rem}
+.headers summary{cursor:pointer;color:#06c}
 .reqstrip .k{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#888}
 .reqstrip b{font-size:.9rem;font-weight:600;word-break:break-word}
 .summary{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0 1rem}
@@ -910,11 +987,33 @@ const traceTemplate = `{{define "content"}}
   {{if .Request.Route}}<td><span class="k">route</span><b>{{.Request.Route}}</b></td>{{end}}
   {{if .Request.Status}}<td><span class="k">status</span><b class="{{if ge .Request.Status 500}}bad{{else if ge .Request.Status 400}}warn{{else}}good{{end}}">{{.Request.Status}}</b></td>{{end}}
   {{if .Request.Identity}}<td><span class="k">account</span><b>{{.Request.Identity}}</b></td>{{end}}
+  {{if .Request.Email}}<td><span class="k">email</span><b>{{.Request.Email}}</b></td>{{end}}
+  {{if .Request.Phone}}<td><span class="k">phone</span><b>{{.Request.Phone}}</b></td>{{end}}
   {{if .Request.ClientIP}}<td><span class="k">client</span><b>{{.Request.ClientIP}}</b></td>{{end}}
   {{if .Request.UserAgent}}<td><span class="k">user agent</span><b>{{.Request.UserAgent}}</b></td>{{end}}
   {{if .Request.Target}}<td><span class="k">target</span><b>{{.Request.Target}}</b></td>{{end}}
 </tr>
 </table>
+{{end}}
+
+{{if .Payload}}
+<div class="payload">
+  <div class="k">request payload</div>
+  <pre>{{.Payload}}</pre>
+</div>
+{{end}}
+
+{{if .Request.Headers}}
+<details class="headers">
+  <summary>{{len .Request.Headers}} request headers</summary>
+  <table class="attrs">
+  <tbody>
+  {{range .Request.Headers}}
+    <tr><td class="key"><code>{{.Key}}</code></td><td class="val">{{.Value}}</td></tr>
+  {{end}}
+  </tbody>
+  </table>
+</details>
 {{end}}
 
 {{.Waterfall.HTML}}
