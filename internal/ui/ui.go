@@ -564,6 +564,22 @@ const pageShell = `{{define "page"}}<!doctype html>
 <title>{{.Title}} — leutik-tarik</title>
 <style>
 html,body{margin:0;padding:0}
+.brandbar{display:flex;align-items:center;gap:1.4rem;flex-wrap:wrap;border-bottom:1px solid #ececec;padding-bottom:.55rem;margin-bottom:.9rem}
+.brand{display:inline-flex;align-items:center;gap:.45rem;text-decoration:none;color:#111}
+.wordmark{font-weight:700;letter-spacing:-.01em;font-size:1.05rem}
+.wordmark .dash{color:#b00020}
+.brandbar nav a{margin-right:1.1rem;text-decoration:none;color:#06c}
+.brandbar nav a:hover{text-decoration:underline}
+/* Whole-row links without JavaScript: the anchor stretches over its row. */
+tr.rowlink{position:relative}
+tr.rowlink:hover td{background:#f6f9fc}
+tr.rowlink a.rowhit{position:absolute;inset:0;text-indent:-9999px;overflow:hidden}
+tr.rowlink:focus-within td{background:#eaf2fb;outline:1px solid #9cc0e8}
+.strip{display:flex;flex-wrap:wrap;gap:.4rem;margin:.1rem 0 .9rem}
+.strip a{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem;border:1px solid #e0e4e8;border-radius:12px;font-size:.8rem;text-decoration:none;color:#234}
+.strip a.on{background:#111;color:#fff;border-color:#111}
+.strip a .n{color:#888}
+.strip a.on .n{color:#cfcfcf}
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;padding:1.25rem;box-sizing:border-box}
 .wrap{max-width:1600px;margin:0 auto}
 /* Anything wider than the viewport scrolls here instead of being clipped. */
@@ -648,7 +664,24 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
 </head>
 <body>
 <div class="wrap">
-<nav><a href="/operations">Operations</a><a href="/services">Services</a><a href="/incidents">Incidents</a><a href="/profiles">Profiles</a><a href="/policies">Policies</a></nav>
+<header class="brandbar">
+  <a class="brand" href="/operations" aria-label="leutik-tarik home">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+      <rect x="1" y="9" width="3" height="4" rx="1" fill="#111"/>
+      <rect x="6" y="5" width="3" height="12" rx="1" fill="#111"/>
+      <rect x="11" y="2" width="3" height="18" rx="1" fill="#b00020"/>
+      <rect x="16" y="7" width="3" height="8" rx="1" fill="#111"/>
+    </svg>
+    <span class="wordmark">leutik<span class="dash">-</span>tarik</span>
+  </a>
+  <nav>
+    <a href="/operations">Operations</a>
+    <a href="/services">Services</a>
+    <a href="/incidents">Incidents</a>
+    <a href="/profiles">Profiles</a>
+    <a href="/policies">Policies</a>
+  </nav>
+</header>
 <div class="pagetop">
   <div>
     <h1>{{.Title}}</h1>
