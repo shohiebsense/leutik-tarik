@@ -342,7 +342,17 @@ func orderedRows(spans []model.Span, traceStart time.Time) []traceRow {
 			if depth >= 64 { // bounded: a malformed trace must not recurse forever
 				break
 			}
-			walk(c, depth+1, append(ancestors, !isLast && depth > 0), i == len(kids)-1)
+			// Only nodes at depth >= 1 own a column, so only they push a flag;
+			// pushing the root's shifted every bar one column left. Copy before
+			// appending: append reuses the backing array, so a shared slice let
+			// one sibling's flag leak into the next.
+			next := ancestors
+			if depth > 0 {
+				next = make([]bool, len(ancestors)+1)
+				copy(next, ancestors)
+				next[len(ancestors)] = !isLast
+			}
+			walk(c, depth+1, next, i == len(kids)-1)
 		}
 	}
 	for i, r := range roots {

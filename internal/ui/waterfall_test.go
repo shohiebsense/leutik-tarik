@@ -71,3 +71,31 @@ func TestOrderedRowsSurfacesOrphans(t *testing.T) {
 		t.Fatalf("orphan dropped: %d rows", len(rows))
 	}
 }
+
+// Sibling branches must not corrupt each other's continuation bars. append()
+// reuses the backing array, so the flags have to be copied per descent.
+func TestTreePrefixColumnsAreStableAcrossSiblings(t *testing.T) {
+	base := time.Now()
+	spans := []model.Span{
+		sp("root", "", base, "root"),
+		sp("a", "root", base.Add(1*time.Millisecond), "A"),
+		sp("a1", "a", base.Add(2*time.Millisecond), "A1"),
+		sp("a1x", "a1", base.Add(3*time.Millisecond), "A1X"), // depth 3
+		sp("b", "root", base.Add(4*time.Millisecond), "B"),   // sibling after a whole subtree
+		sp("b1", "b", base.Add(5*time.Millisecond), "B1"),
+	}
+	rows := orderedRows(spans, base)
+	want := map[string]string{
+		"root": "",
+		"A":    "├─ ",
+		"A1":   "│  └─ ",
+		"A1X":  "│     └─ ",
+		"B":    "└─ ",
+		"B1":   "   └─ ",
+	}
+	for _, r := range rows {
+		if got := r.Prefix; got != want[r.Span.Name] {
+			t.Errorf("%s prefix = %q, want %q", r.Span.Name, got, want[r.Span.Name])
+		}
+	}
+}
