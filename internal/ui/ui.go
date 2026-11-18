@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -85,6 +86,34 @@ func (u UI) clock() time.Time {
 	return time.Now()
 }
 
+// refreshSeconds is how often a live operations page re-asks for its window.
+// One minute: short enough that "now" means now, long enough that reading the
+// list is not interrupted by a reload.
+const refreshSeconds = 60
+
+// windowURL is the same page with the filters kept and from/to replaced (both
+// empty removes them, which is what turns a frozen window back into a live
+// one). Values are omitted when unchanged so a link stays short.
+func windowURL(basePath string, in url.Values, from, to string) string {
+	out := url.Values{}
+	for k, v := range in {
+		if k == "from" || k == "to" {
+			continue
+		}
+		out[k] = v
+	}
+	if from != "" {
+		out.Set("from", from)
+	}
+	if to != "" {
+		out.Set("to", to)
+	}
+	if len(out) == 0 {
+		return basePath
+	}
+	return basePath + "?" + out.Encode()
+}
+
 // Operations renders the searchable operations list.
 func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	// Service scope comes from the path (/operations/{service}) so the URL reads
@@ -110,16 +139,32 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		IncludeBackground: r.URL.Query().Get("all") == "1",
 		Limit:             store.MaxLimit,
 	}
-	// Time range: default to the last 24h so the page never scans everything.
+	// Time range: a 15-minute window by default, because this is a "what is
+	// happening now" list, not an archive. A range given in the URL stays exactly
+	// where it was put; only the default window follows the clock (and the page
+	// refreshes itself, see refreshSeconds below), so paging through an incident
+	// is never yanked forward.
 	to := u.clock()
-	from := to.Add(-24 * time.Hour)
+	from := to.Add(-15 * time.Minute)
+	live := true
 	if t, ok := parseTime(r.URL.Query().Get("from")); ok {
-		from = t
+		from, live = t, false
 	}
 	if t, ok := parseTime(r.URL.Query().Get("to")); ok {
-		to = t
+		to, live = t, false
 	}
 	q.From, q.To = from, to
+	fromStr, toStr := inDisplay(from).Format(inputTimeLayout), inDisplay(to).Format(inputTimeLayout)
+
+	// A live window has to advance without the viewer pressing reload, and the
+	// browser runs no JavaScript (ADR 0002), so the server-rendered answer is a
+	// meta refresh: the page re-asks for the last 15 minutes every minute. The
+	// trade-off is a full document reload (scroll position resets), which is why
+	// a pinned window never refreshes and the live line offers a freeze link.
+	refresh := 0
+	if live {
+		refresh = refreshSeconds
+	}
 
 	// Every service in the window: once more than one service reports, a flat
 	// list is a directory with no index.
@@ -135,6 +180,16 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// The footer states the totals for the window it just showed, so the live
+	// line and the table can never disagree.
+	var totalErrors int
+	for _, s := range spans {
+		if s.Outcome == model.OutcomeError || s.Outcome == model.OutcomeServerError {
+			totalErrors++
+		}
+	}
+
 	render(w, r, operationsView, map[string]any{
 		"Strip":    strip,
 		"Title":    title,
@@ -143,8 +198,19 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"Spans":    spans,
 		"Query":    q,
 		"Outcomes": outcomes,
-		"From":     inDisplay(from).Format(inputTimeLayout),
-		"To":       inDisplay(to).Format(inputTimeLayout),
+		"From":     fromStr,
+		"To":       toStr,
+		"Window":   to.Sub(from),
+		// HumanDuration has a minutes rung ("15m"); the template's human helper
+		// stops at hours, so a 15-minute window would read "15m0s".
+		"WindowLabel": policy.HumanDuration(to.Sub(from)),
+
+		"Live":           live,
+		"RefreshSeconds": refresh,
+		"TotalSpans":     len(spans),
+		"TotalErrors":    totalErrors,
+		"PinnedURL":      windowURL(basePath, r.URL.Query(), fromStr, toStr),
+		"LiveURL":        windowURL(basePath, r.URL.Query(), "", ""),
 	})
 }
 
@@ -655,6 +721,9 @@ const pageShell = `{{define "page"}}<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — leutik-tarik</title>
+{{/* A live window advances only by re-asking the server, and this UI runs no
+     JavaScript (ADR 0002), so the refresh is the document-level one. */}}
+{{if .RefreshSeconds}}<meta http-equiv="refresh" content="{{.RefreshSeconds}}">{{end}}
 <style>
 html,body{margin:0;padding:0}
 .brandbar{display:flex;align-items:center;gap:1.4rem;flex-wrap:wrap;border-bottom:1px solid #ececec;padding-bottom:.55rem;margin-bottom:.9rem}
@@ -926,7 +995,7 @@ const servicesTemplate = `{{define "content"}}
 <p class="dim">No endpoint exceeded the thresholds in this window (median ≤ {{short .Config.SlowMedian}}, p95 ≤ {{short .Config.SlowP95}}, &lt;5% failures, ≥{{.Config.MinSamples}} hits).</p>
 {{end}}
 
-<p class="dim">{{human .Window}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
+<p class="dim">{{.WindowLabel}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}</p>
 
 <table>
 <thead><tr><th>Service</th><th>Operations</th><th>Errors</th><th>Error rate</th><th>p50</th><th>p95</th><th>Routes</th><th>Last seen</th></tr></thead>
@@ -1137,6 +1206,8 @@ const operationsTemplate = `{{define "content"}}
   <label><input type="checkbox" name="all" value="1" {{if .Query.IncludeBackground}}checked{{end}}> include background jobs</label>
   <button type="submit">Search</button>
 </form>
+<p class="dim">{{.WindowLabel}} window · {{.TotalSpans}} operations · {{.TotalErrors}} failed · from {{.From}} to {{.To}}
+{{if .Live}} · <b>live</b>, refreshes every {{.RefreshSeconds}}s — <a href="{{.PinnedURL}}">freeze this window</a>{{else}} · frozen — <a href="{{.LiveURL}}">back to live</a>{{end}}</p>
 <table>
 <thead><tr><th>Time</th><th>Request</th><th>Duration</th><th>Outcome</th></tr></thead>
 <tbody>
