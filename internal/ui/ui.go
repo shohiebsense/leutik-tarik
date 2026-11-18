@@ -402,7 +402,13 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
-table td.tree{white-space:pre;font-variant-numeric:tabular-nums}
+table td.tree{
+  white-space:pre;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.82rem;
+  line-height:1.15;
+  color:#333;
+}
 .code{display:inline-block;padding:0 .35rem;border-radius:3px;background:#eef;color:#234;font-variant-numeric:tabular-nums}
 .code.bad{background:#fdecef;color:#b00020}
 .code.warn{background:#fdf6e3;color:#8a5b00}

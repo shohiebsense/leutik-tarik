@@ -48,11 +48,26 @@ type wfTick struct {
 }
 
 const (
-	wfLabelWidth = 240
-	wfBarHeight  = 18
-	wfRowGap     = 6
-	wfRightPad   = 16
+	wfBarHeight = 18
+	wfRowGap    = 6
+	wfRightPad  = 16
+	// Approximate advance of the 11px monospace label font, used to cut labels
+	// to the column instead of letting them run under the bars.
+	wfCharWidth = 6.2
 )
+
+// labelColumn is the width reserved for span labels. Proportional, because a
+// fixed 240px wasted most of a 1900px chart and truncated names that had room.
+func labelColumn(width int) int {
+	w := int(float64(width) * 0.42)
+	if w < 260 {
+		w = 260
+	}
+	if w > 620 {
+		w = 620
+	}
+	return w
+}
 
 // buildWaterfall lays out spans as bars against a common time axis.
 func buildWaterfall(spans []model.Span, width int) waterfall {
@@ -78,7 +93,8 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 		total = time.Microsecond // avoid divide-by-zero on a zero-width trace
 	}
 
-	plot := float64(width - wfLabelWidth - wfRightPad)
+	labelW := labelColumn(width)
+	plot := float64(width - labelW - wfRightPad)
 	wf := waterfall{Width: width, Total: total}
 	wf.Critical = criticalPath(spans)
 	critical := map[string]bool{}
@@ -94,7 +110,7 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 	for i, row := range orderedRows(spans, start) {
 		s := row.Span
 		offset := s.StartTime.Sub(start)
-		x := wfLabelWidth + float64(offset)/float64(total)*plot
+		x := float64(labelW) + float64(offset)/float64(total)*plot
 		w := float64(s.Duration) / float64(total) * plot
 		if w < 1.5 {
 			w = 1.5 // a zero-duration span must still be visible
@@ -106,13 +122,13 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 			X:        x,
 			W:        w,
 			Y:        10 + i*(wfBarHeight+wfRowGap),
-			Label:    shortLabel(s),
+			Label:    fitLabel(row.Prefix+shortLabel(s), labelW-10),
 			Critical: critical[s.SpanID],
 			Color:    outcomeColor(s.Outcome),
 		})
 	}
 	wf.Height = 20 + len(spans)*(wfBarHeight+wfRowGap)
-	wf.Ticks = ticks(total, plot)
+	wf.Ticks = ticks(total, plot, labelW)
 	wf.HTML = wf.svg()
 	return wf
 }
@@ -160,14 +176,14 @@ func criticalPath(spans []model.Span) []string {
 }
 
 // ticks places a few labelled gridlines without claiming spurious precision.
-func ticks(total time.Duration, plot float64) []wfTick {
+func ticks(total time.Duration, plot float64, labelW int) []wfTick {
 	n := 4
 	out := make([]wfTick, 0, n+1)
 	for i := 0; i <= n; i++ {
 		frac := float64(i) / float64(n)
 		d := time.Duration(float64(total) * frac)
 		out = append(out, wfTick{
-			X:     wfLabelWidth + frac*plot,
+			X:     float64(labelW) + frac*plot,
 			Label: tickLabel(d),
 			Major: i == 0 || i == n,
 			Last:  i == n,
@@ -226,6 +242,8 @@ func (wf waterfall) svg() template.HTML {
 		wf.Width, wf.Height)
 	fmt.Fprintf(&b, `<rect x="0" y="0" width="%d" height="%d" fill="#fbfbfb"/>`, wf.Width, wf.Height)
 
+	labelW := labelColumn(wf.Width)
+	fmt.Fprintf(&b, `<line x1="%d" y1="0" x2="%d" y2="%d" stroke="#eee" stroke-width="1"/>`, labelW-4, labelW-4, wf.Height)
 	for _, t := range wf.Ticks {
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%d" stroke="#e3e3e3" stroke-width="1"/>`, t.X, t.X, wf.Height)
 		if t.Last {
@@ -243,8 +261,8 @@ func (wf waterfall) svg() template.HTML {
 			stroke = "#111"
 			strokeWidth = 1
 		}
-		fmt.Fprintf(&b, `<text x="4" y="%d" font-size="11" fill="%s">%s</text>`,
-			r.Y+13, textFill(r.Critical), escapeXML(r.Prefix+r.Label))
+		fmt.Fprintf(&b, `<text x="6" y="%d" font-size="11" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" fill="%s">%s</text>`,
+			r.Y+13, textFill(r.Critical), escapeXML(r.Label))
 		fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.1f" height="%d" rx="2" fill="%s" stroke="%s" stroke-width="%d"><title>%s · %s · %s</title></rect>`,
 			r.X, r.Y, r.W, wfBarHeight, r.Color, stroke, strokeWidth,
 			escapeXML(r.Span.Name), barDuration(r.Span.Duration), r.Span.ServiceName)
@@ -390,4 +408,22 @@ func sortSpans(spans []model.Span) {
 		}
 		return spans[i].SpanID < spans[j].SpanID
 	})
+}
+
+// fitLabel trims a label to the pixels available, counting the monospace
+// advance, and marks the cut with an ellipsis rather than letting the text run
+// under the bars.
+func fitLabel(s string, availPx int) string {
+	if availPx <= 0 {
+		return s
+	}
+	maxChars := int(float64(availPx) / wfCharWidth)
+	if maxChars < 8 {
+		maxChars = 8
+	}
+	r := []rune(s)
+	if len(r) <= maxChars {
+		return s
+	}
+	return string(r[:maxChars-1]) + "…"
 }
