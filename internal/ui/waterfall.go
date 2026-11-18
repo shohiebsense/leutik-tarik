@@ -222,16 +222,14 @@ func outcomeColor(outcome string) string {
 	}
 }
 
-// shortLabel keeps the SVG readable; the table carries the full names.
+// shortLabel picks which name to show. It does NOT truncate: fitLabel cuts to
+// the pixels the label column actually has, and a fixed 34-character cut was
+// throwing away text while two thirds of the column sat empty.
 func shortLabel(s model.Span) string {
-	name := s.Name
 	if s.HTTPRoute != "" {
-		name = s.HTTPRoute
+		return s.HTTPRoute
 	}
-	if len(name) > 34 {
-		name = name[:33] + "…"
-	}
-	return name
+	return s.Name
 }
 
 // svg emits the chart. Uses only primitives (rect/line/text) so it renders
