@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -282,5 +283,53 @@ func TestSemconvGenerationsBothWork(t *testing.T) {
 	r2, _ := normalize(nw, time.Now(), nil)
 	if r2[0].Span.HTTPMethod != "GET" || r2[0].Span.StatusCode != 200 {
 		t.Errorf("new semconv broke: %+v", r2[0].Span)
+	}
+}
+
+// pgx emits a pool.acquire span per query: 30 queries meant 30 rows that only
+// say a connection was taken. Dropped at ingest, counted, never stored.
+func TestPoolSpansDropped(t *testing.T) {
+	raw := []rawSpan{
+		{resource: map[string]string{"service.name": "svc"}, name: "pool.acquire", traceID: "aa", spanID: "s1"},
+		{resource: map[string]string{"service.name": "svc"}, name: "SELECT", traceID: "aa", spanID: "s2",
+			attrs: map[string]string{"db.system": "postgresql", "db.query.text": "SELECT id FROM customers WHERE id = $1"}},
+	}
+	records, stats := normalize(raw, time.Now(), nil)
+	if len(records) != 1 {
+		t.Fatalf("want 1 stored span, got %d", len(records))
+	}
+	if stats.droppedSpans != 1 {
+		t.Errorf("dropped = %d, want 1", stats.droppedSpans)
+	}
+}
+
+// "SELECT" tells a reader nothing; the statement's table does.
+func TestDescriptiveDBNames(t *testing.T) {
+	cases := []struct{ name, text, want string }{
+		{"SELECT", "SELECT id FROM customers WHERE id = $1", "SELECT customers"},
+		{"INSERT", "INSERT INTO abt_scan_units (x) VALUES ($1)", "INSERT abt_scan_units"},
+		{"UPDATE", `UPDATE "payment_journeys" SET status = 'X'`, "UPDATE payment_journeys"},
+		// A CTE reports the table it reads, which is the useful part.
+		{"WITH", "WITH recent AS (SELECT * FROM fare_version) SELECT 1", "WITH fare_version"},
+		{"GET /x", "SELECT 1 FROM ignored", "GET /x"}, // non-SQL names untouched
+	}
+	for _, c := range cases {
+		attrs := map[string]string{"db.system": "postgresql"}
+		if c.text != "" {
+			attrs["db.query.text"] = c.text
+		}
+		if got := descriptiveName(c.name, attrs); got != c.want {
+			t.Errorf("descriptiveName(%q) = %q, want %q", c.name, got, c.want)
+		}
+	}
+	// db.query.summary wins when the instrumentation supplies one.
+	got := descriptiveName("SELECT", map[string]string{"db.query.summary": "SELECT customers"})
+	if got != "SELECT customers" {
+		t.Errorf("summary not preferred: %q", got)
+	}
+	// Long names are truncated with an ellipsis, never silently.
+	long := descriptiveName("SELECT", map[string]string{"db.query.summary": strings.Repeat("x", 100)})
+	if len(long) > 64 || !strings.HasSuffix(long, "…") {
+		t.Errorf("long name not truncated: %q", long)
 	}
 }

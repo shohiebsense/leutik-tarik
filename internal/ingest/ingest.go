@@ -89,8 +89,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.snapshotLogs(r, records)
 
-	h.logf("otlp ingest format=%s encoding=%s decompressed_bytes=%d spans=%d dropped_attrs=%d redacted=%d",
-		kind, encodingOrDefault(encoding), len(body), len(records), stats.droppedAttrs, stats.redacted)
+	h.logf("otlp ingest format=%s encoding=%s decompressed_bytes=%d spans=%d dropped_attrs=%d dropped_spans=%d redacted=%d",
+		kind, encodingOrDefault(encoding), len(body), len(records), stats.droppedAttrs, stats.droppedSpans, stats.redacted)
 
 	writeSuccess(w, kind)
 }

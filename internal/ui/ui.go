@@ -149,6 +149,10 @@ type traceRow struct {
 	Offset time.Duration
 	// Depth is 0 for the root; children are indented one level.
 	Depth int
+	// Prefix is the tree drawing for this row (ancestor bars + branch glyph).
+	// Without it every nested row rendered the same "└", which read as a flat
+	// list even when the depth was correct.
+	Prefix string
 }
 
 // spanDetail is one span plus its attributes, rendered as a block in call order.
@@ -398,6 +402,7 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
+table td.tree{white-space:pre;font-variant-numeric:tabular-nums}
 .code{display:inline-block;padding:0 .35rem;border-radius:3px;background:#eef;color:#234;font-variant-numeric:tabular-nums}
 .code.bad{background:#fdecef;color:#b00020}
 .code.warn{background:#fdf6e3;color:#8a5b00}
@@ -757,7 +762,7 @@ const traceTemplate = `{{define "content"}}
 <tbody>
 {{range .Rows}}
 <tr>
-  <td style="{{indent .Depth}}">{{.Span.Name}}</td>
+  <td class="tree">{{.Prefix}}{{.Span.Name}}</td>
   <td>{{.Span.ServiceName}}</td>
   <td>{{.Span.Kind}}</td>
   <td class="dim">{{if .Span.DBSystem}}{{.Span.DBSystem}} {{.Span.DBOperation}}{{if .Span.DBQuerySummary}} · {{.Span.DBQuerySummary}}{{end}}{{else if .Span.RPCSystem}}{{.Span.RPCSystem}} {{.Span.RPCService}}/{{.Span.RPCMethod}}{{else if .Span.MessagingSystem}}{{.Span.MessagingSystem}} {{.Span.MessagingOperation}} {{.Span.MessagingDestination}}{{end}}{{if .Span.StatusMessage}} · {{.Span.StatusMessage}}{{end}}</td>

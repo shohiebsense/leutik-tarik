@@ -29,6 +29,7 @@ type waterfall struct {
 type wfRow struct {
 	Span     model.Span
 	Depth    int
+	Prefix   string
 	X        float64 // pixels
 	W        float64
 	Y        int
@@ -90,7 +91,8 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 		byID[s.SpanID] = s
 	}
 
-	for i, s := range spans {
+	for i, row := range orderedRows(spans, start) {
+		s := row.Span
 		offset := s.StartTime.Sub(start)
 		x := wfLabelWidth + float64(offset)/float64(total)*plot
 		w := float64(s.Duration) / float64(total) * plot
@@ -99,7 +101,8 @@ func buildWaterfall(spans []model.Span, width int) waterfall {
 		}
 		wf.Rows = append(wf.Rows, wfRow{
 			Span:     s,
-			Depth:    depthOf(spans, s),
+			Depth:    row.Depth,
+			Prefix:   row.Prefix,
 			X:        x,
 			W:        w,
 			Y:        10 + i*(wfBarHeight+wfRowGap),
@@ -241,7 +244,7 @@ func (wf waterfall) svg() template.HTML {
 			strokeWidth = 1
 		}
 		fmt.Fprintf(&b, `<text x="4" y="%d" font-size="11" fill="%s">%s</text>`,
-			r.Y+13, textFill(r.Critical), escapeXML(padLeft(r.Label, r.Depth)))
+			r.Y+13, textFill(r.Critical), escapeXML(r.Prefix+r.Label))
 		fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.1f" height="%d" rx="2" fill="%s" stroke="%s" stroke-width="%d"><title>%s · %s · %s</title></rect>`,
 			r.X, r.Y, r.W, wfBarHeight, r.Color, stroke, strokeWidth,
 			escapeXML(r.Span.Name), barDuration(r.Span.Duration), r.Span.ServiceName)
@@ -275,7 +278,7 @@ func padLeft(s string, depth int) string {
 	if depth <= 0 {
 		return s
 	}
-	return strings.Repeat("  ", depth) + "└ " + s
+	return s
 }
 
 // escapeXML protects the SVG from span names containing markup.
@@ -324,23 +327,50 @@ func orderedRows(spans []model.Span, traceStart time.Time) []traceRow {
 	}
 
 	rows := make([]traceRow, 0, len(spans))
-	var walk func(s model.Span, depth int)
-	walk = func(s model.Span, depth int) {
+	// ancestors[i] records whether the ancestor at level i still has siblings
+	// below it, which decides whether that column draws a continuation bar.
+	var walk func(s model.Span, depth int, ancestors []bool, isLast bool)
+	walk = func(s model.Span, depth int, ancestors []bool, isLast bool) {
 		rows = append(rows, traceRow{
 			Span:   s,
 			Offset: s.StartTime.Sub(traceStart),
 			Depth:  depth,
+			Prefix: treePrefix(depth, ancestors, isLast),
 		})
-		for _, c := range children[s.SpanID] {
-			if depth < 64 { // bounded: a malformed trace must not recurse forever
-				walk(c, depth+1)
+		kids := children[s.SpanID]
+		for i, c := range kids {
+			if depth >= 64 { // bounded: a malformed trace must not recurse forever
+				break
 			}
+			walk(c, depth+1, append(ancestors, !isLast && depth > 0), i == len(kids)-1)
 		}
 	}
-	for _, r := range roots {
-		walk(r, 0)
+	for i, r := range roots {
+		walk(r, 0, nil, i == len(roots)-1)
 	}
 	return rows
+}
+
+// treePrefix draws the classic tree: a bar for every ancestor that still has
+// siblings below it, then a branch glyph for this row.
+func treePrefix(depth int, ancestors []bool, isLast bool) string {
+	if depth == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < depth-1; i++ {
+		if i < len(ancestors) && ancestors[i] {
+			b.WriteString("│  ")
+		} else {
+			b.WriteString("   ")
+		}
+	}
+	if isLast {
+		b.WriteString("└─ ")
+	} else {
+		b.WriteString("├─ ")
+	}
+	return b.String()
 }
 
 func sortSpans(spans []model.Span) {

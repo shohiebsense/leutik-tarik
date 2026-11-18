@@ -12,6 +12,7 @@ import (
 
 type normStats struct {
 	droppedAttrs int
+	droppedSpans int
 	redacted     int
 }
 
@@ -26,6 +27,13 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 	out := make([]model.Record, 0, len(raw))
 	for _, r := range raw {
 		stats.droppedAttrs += r.dropped
+
+		// Drop instrumentation-internal spans before anything else: they would
+		// otherwise occupy a row in every trace that touches the database.
+		if isNoise(r.name) {
+			stats.droppedSpans++
+			continue
+		}
 
 		redacted := redact(r.attrs)
 		stats.redacted += redacted
@@ -42,7 +50,7 @@ func normalize(raw []rawSpan, ingestedAt time.Time, eng *policy.Engine) ([]model
 			ServiceVersion: r.resource["service.version"],
 			Environment:    r.resource["deployment.environment"],
 
-			Name:          spanName(r),
+			Name:          descriptiveName(spanName(r), r.attrs),
 			Kind:          kindName(r.kind),
 			OperationType: operationType(r.attrs, r.name),
 
