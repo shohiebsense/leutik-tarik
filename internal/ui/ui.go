@@ -44,8 +44,22 @@ func (u UI) clock() time.Time {
 
 // Operations renders the searchable operations list.
 func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
+	// Service scope comes from the path (/operations/{service}) so the URL reads
+	// like the service page, with ?service= kept for older links and for the
+	// form, which submits flat query parameters.
+	service := r.PathValue("service")
+	if service == "" {
+		service = r.URL.Query().Get("service")
+	}
+	basePath := "/operations"
+	title := "Operations"
+	if service != "" {
+		basePath = "/operations/" + service
+		title = "Operations · " + service
+	}
+
 	q := store.Query{
-		Service: r.URL.Query().Get("service"),
+		Service: service,
 		Route:   r.URL.Query().Get("route"),
 		Method:  r.URL.Query().Get("method"),
 		Outcome: r.URL.Query().Get("outcome"),
@@ -70,7 +84,9 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, operationsView, map[string]any{
-		"Title":    "Operations",
+		"Title":    title,
+		"Service":  service,
+		"BasePath": basePath,
 		"Spans":    spans,
 		"Query":    q,
 		"Outcomes": outcomes,
@@ -410,7 +426,7 @@ table.attrs td.val{word-break:break-word;max-width:70ch}
 <div class="wrap">
 <nav><a href="/operations">Operations</a><a href="/services">Services</a><a href="/incidents">Incidents</a><a href="/profiles">Profiles</a><a href="/policies">Policies</a></nav>
 <h1>{{.Title}}</h1>
-<p class="zone" id="zone">All times shown in {{.Zone}}</p>
+<p class="zone" id="zone">All times shown in {{.Zone}}{{if .Service}} · scoped to {{.Service}} — <a href="/operations">show all services</a>{{end}}</p>
 <div class="content">
 {{template "content" .}}
 </div>
@@ -620,7 +636,7 @@ const serviceDetailTemplate = `{{define "content"}}
 </tbody>
 </table>
 
-<p><a href="/services">← all services</a> · <a href="/operations?service={{.Service}}">operations for this service</a></p>
+<p><a href="/services">← all services</a> · <a href="/operations/{{.Service}}">operations for this service</a></p>
 {{end}}`
 
 const incidentsTemplate = `{{define "content"}}
@@ -687,7 +703,7 @@ const policiesTemplate = `{{define "content"}}
 {{end}}`
 
 const operationsTemplate = `{{define "content"}}
-<form method="get" action="/operations">
+<form method="get" action="{{.BasePath}}">
   <input type="text" name="service" placeholder="service" value="{{.Query.Service}}">
   <input type="text" name="route" placeholder="route" value="{{.Query.Route}}">
   <input type="text" name="method" placeholder="method" value="{{.Query.Method}}">

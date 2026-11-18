@@ -54,6 +54,7 @@ func NewWithOptions(o Options) http.Handler {
 	mux.HandleFunc("/profiles/{profileID}", u.ProfileDetail)
 	mux.Handle("/v1/profiles", ingest.ProfilesHandler{Store: s, MaxBodyBytes: 64 << 20})
 	mux.HandleFunc("/operations", u.Operations)
+	mux.HandleFunc("/operations/{service}", u.Operations)
 	mux.HandleFunc("/traces/{traceID}", u.Trace)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
