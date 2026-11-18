@@ -687,6 +687,96 @@ type attrRow struct {
 }
 
 // Trace renders one trace as a summary plus a waterfall table.
+// errorCause is one failing span and everything the trace actually says about
+// why. The point is to separate what the service reported from what we inferred,
+// because a page that shows a 401 with no explanation reads as "no difference
+// between an error and a success".
+type errorCause struct {
+	Span    string
+	Outcome string
+	Status  int
+	// Reported is the service's own words: status message, error type or an
+	// exception attribute. Empty when the service sent only a status code.
+	Reported string
+	// Inferred is derived from the status code, and labelled as such in the page.
+	Inferred string
+}
+
+// traceErrors collects the failing spans, worst first, with what we can honestly
+// say about each.
+func traceErrors(spans []model.Span) []errorCause {
+	var out []errorCause
+	for _, sp := range spans {
+		if !isFailure(sp) {
+			continue
+		}
+		out = append(out, errorCause{
+			Span:     displayName(sp),
+			Outcome:  sp.Outcome,
+			Status:   sp.StatusCode,
+			Reported: reportedReason(sp),
+			Inferred: inferCause(sp.StatusCode, sp.Outcome),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Status >= out[j].Status })
+	return out
+}
+
+// isFailure includes client errors: a rejected login is the thing a person opens
+// a trace to explain, and it was rendered in the same grey as a success.
+func isFailure(s model.Span) bool {
+	switch s.Outcome {
+	case model.OutcomeError, model.OutcomeServerError, model.OutcomeClientError:
+		return true
+	}
+	return s.StatusCode >= 400
+}
+
+// reportedReason is what the service itself said, in its own words. Nothing here
+// is invented: an empty result means the span carried no reason at all.
+func reportedReason(s model.Span) string {
+	if msg := strings.TrimSpace(s.StatusMessage); msg != "" {
+		return msg
+	}
+	if et := strings.TrimSpace(s.ErrorType); et != "" {
+		return et
+	}
+	for _, k := range []string{"error.message", "exception.message", "otel.status_description"} {
+		if v := strings.TrimSpace(s.Attributes[k]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// inferCause reads the status code the way a person would. It is separate from
+// reportedReason so the page can say which is which: an inference is a hint, not
+// evidence, and the fix is for the service to send the real message.
+func inferCause(status int, outcome string) string {
+	switch {
+	case status == 400:
+		return "the service rejected the request as malformed"
+	case status == 401:
+		return "authentication failed — the credentials were rejected"
+	case status == 403:
+		return "the caller is not allowed to perform this"
+	case status == 404:
+		return "no such route or record"
+	case status == 409:
+		return "the request conflicts with the current state"
+	case status == 422:
+		return "the request body failed validation"
+	case status == 429:
+		return "the caller is being rate limited"
+	case status >= 500:
+		return "the service failed while handling the request"
+	case outcome == model.OutcomeError:
+		return "the operation failed"
+	}
+	return ""
+}
+
+// Trace renders one request's full story.
 func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 	traceID := r.PathValue("traceID")
 	spans, err := u.Store.GetTrace(r.Context(), traceID)
@@ -768,6 +858,7 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 		"ExactLogs":   exact,
 		"Correlated":  correlated,
 		"Waterfall":   buildWaterfall(spans, 980),
+		"Errors":      traceErrors(spans),
 	})
 }
 
@@ -993,6 +1084,12 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .find button{padding:.5rem 1rem;background:#111;color:#fff;border:0;border-radius:5px;font-size:.9rem;font-weight:600;cursor:pointer}
 .find button:hover{background:#333}
 .find .clear{font-size:.85rem;color:#666}
+.errbox{border:1px solid #f0c7cd;background:#fdf6f7;border-left:4px solid #b00020;border-radius:5px;padding:.55rem .75rem;margin:.2rem 0 .8rem}
+.errhead{margin:0 0 .25rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.errbadge{font-size:.72rem;font-weight:700;letter-spacing:.02em;text-transform:uppercase;padding:.1rem .45rem;border-radius:3px}
+.errbadge.bad{background:#b00020;color:#fff}
+.errbadge.warn{background:#8a5b00;color:#fff}
+.errwhy{margin:0;font-size:.88rem;line-height:1.45}
 .chips{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:#666;margin:0 0 .5rem}
 .chips .k{text-transform:uppercase;letter-spacing:.04em;font-size:.68rem;color:#888;margin-right:.2rem}
 .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.1rem .5rem;background:#eef3f8;border:1px solid #d6e2ee;border-radius:12px;color:#234}
@@ -1525,11 +1622,31 @@ const operationsTemplate = `{{define "content"}}
 {{end}}`
 
 const traceTemplate = `{{define "content"}}
+{{/* The failing span first: someone opened this trace because a request failed,
+     and it used to be one grey row among many. */}}
+{{range .Errors}}
+<div class="errbox">
+  <p class="errhead">
+    <span class="errbadge {{if ge .Status 500}}bad{{else}}warn{{end}}">
+      {{if .Status}}{{.Status}} · {{end}}{{.Outcome}}
+    </span>
+    <b>{{.Span}}</b>
+  </p>
+  <p class="errwhy">
+    {{if .Reported}}<b>Reported by the service:</b> {{.Reported}}
+    {{else if .Inferred}}<b>Probably:</b> {{.Inferred}}.
+      <span class="dim">Inferred from the status code — the service sent no message,
+      error type or logs with this span.</span>
+    {{else}}<span class="dim">No reason was recorded for this failure.</span>{{end}}
+  </p>
+</div>
+{{end}}
+
 <p>Trace ID: <code>{{.TraceID}}</code></p>
 
 <table class="summary">
 <tr>
-  <td><b class="{{if or (eq .Summary.Outcome "server_error") (eq .Summary.Outcome "error")}}bad{{end}}">{{.Summary.Outcome}}</b><span class="dim">trace outcome</span></td>
+  <td><b class="{{if or (eq .Summary.Outcome "server_error") (eq .Summary.Outcome "error")}}bad{{else if eq .Summary.Outcome "client_error"}}warn{{end}}">{{.Summary.Outcome}}</b><span class="dim">trace outcome</span></td>
   <td><b>{{.Summary.ErrorSpans}} / {{.Summary.Spans}}</b><span class="dim">error spans / spans</span></td>
   <td><b>{{dur .Summary.Duration}}</b><span class="dim">wall time</span></td>
   <td><b>{{.Summary.Slowest.Name}}</b><span class="dim">slowest span ({{dur .Summary.Slowest.Duration}})</span></td>
