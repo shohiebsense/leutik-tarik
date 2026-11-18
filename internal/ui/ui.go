@@ -81,12 +81,22 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	}
 	q.From, q.To = from, to
 
+	// Every service in the window: once more than one service reports, a flat
+	// list is a directory with no index.
+	var strip []store.ServiceStat
+	if stats, ok := u.Store.(store.Stats); ok {
+		if all, serr := stats.ServiceStats(r.Context(), from, to); serr == nil {
+			strip = all
+		}
+	}
+
 	spans, err := u.Store.ListOperations(r.Context(), q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	render(w, operationsView, map[string]any{
+		"Strip":    strip,
 		"Title":    title,
 		"Service":  service,
 		"BasePath": basePath,
@@ -783,8 +793,8 @@ const servicesTemplate = `{{define "content"}}
 <thead><tr><th>Service</th><th>Operations</th><th>Errors</th><th>Error rate</th><th>p50</th><th>p95</th><th>Routes</th><th>Last seen</th></tr></thead>
 <tbody>
 {{range .Rows}}
-<tr>
-  <td><a href="/services/{{.Service}}">{{.Service}}</a></td>
+<tr class="rowlink">
+  <td><a class="rowhit" href="/services/{{.Service}}">open service {{.Service}}</a><a href="/services/{{.Service}}">{{.Service}}</a></td>
   <td>{{.Spans}}</td>
   <td class="{{if gt .Errors 0}}bad{{end}}">{{.Errors}}</td>
   <td>
@@ -808,8 +818,8 @@ const servicesTemplate = `{{define "content"}}
 <thead><tr><th>#</th><th>Endpoint</th><th>Service</th><th>Requests</th><th>Total time</th><th>Share</th><th>Median</th><th>p95</th><th>Errors</th><th>Verdict</th></tr></thead>
 <tbody>
 {{range $i, $e := .Endpoints}}
-<tr>
-  <td class="dim">{{inc $i}}</td>
+<tr class="rowlink">
+  <td><a class="rowhit" href="/operations/{{$e.Service}}?route={{$e.Route}}&method={{$e.Method}}">{{$e.Method}} {{$e.Route}} in {{$e.Service}}</a><span class="dim">{{inc $i}}</span></td>
   <td>{{if $e.Method}}{{$e.Method}} {{end}}{{$e.Route}}</td>
   <td>{{$e.Service}}</td>
   <td>{{$e.Count}}</td>
@@ -883,8 +893,8 @@ const serviceDetailTemplate = `{{define "content"}}
 <thead><tr><th>#</th><th>Request</th><th>Requests</th><th>Total</th><th>Median</th><th>p95</th><th>Errors</th><th>Verdict</th></tr></thead>
 <tbody>
 {{range $i, $e := .Endpoints}}
-<tr>
-  <td class="dim">{{inc $i}}</td>
+<tr class="rowlink">
+  <td><a class="rowhit" href="/operations/{{$e.Service}}?route={{$e.Route}}&method={{$e.Method}}">{{$e.Method}} {{$e.Route}} in {{$e.Service}}</a><span class="dim">{{inc $i}}</span></td>
   <td><b>{{$e.Method}}</b> {{$e.Route}}</td>
   <td>{{$e.Count}}</td>
   <td><b>{{dur $e.Total}}</b></td>
@@ -909,8 +919,8 @@ const incidentsTemplate = `{{define "content"}}
 <thead><tr><th>Count</th><th>Service</th><th>Route</th><th>Outcome</th><th>Error</th><th>Message</th><th>Traces</th><th>First seen</th><th>Last seen</th></tr></thead>
 <tbody>
 {{range .Groups}}
-<tr>
-  <td>
+<tr class="rowlink">
+  <td><a class="rowhit" href="/operations/{{.Service}}?route={{.Route}}&outcome={{.Outcome}}">{{.Outcome}} {{.Route}} in {{.Service}}</a>
     <span class="bar"><span class="fill bad-bg" style="{{bar .Count $.Max}}"></span></span>
     <b>{{.Count}}</b>
   </td>
@@ -966,6 +976,15 @@ const policiesTemplate = `{{define "content"}}
 {{end}}`
 
 const operationsTemplate = `{{define "content"}}
+{{if .Strip}}
+<div class="strip">
+  <a href="/operations" class="{{if not .Service}}on{{end}}">all services</a>
+  {{range .Strip}}
+  <a href="/operations/{{.Service}}" class="{{if eq .Service $.Service}}on{{end}}">{{.Service}} <span class="n">{{.Spans}}</span></a>
+  {{end}}
+</div>
+{{end}}
+
 <form method="get" action="{{.BasePath}}">
   <input type="text" name="service" placeholder="service" value="{{.Query.Service}}">
   <input type="text" name="route" placeholder="route" value="{{.Query.Route}}">
@@ -980,11 +999,11 @@ const operationsTemplate = `{{define "content"}}
   <button type="submit">Search</button>
 </form>
 <table>
-<thead><tr><th>Time</th><th>Request</th><th>Duration</th><th>Outcome</th><th>Trace</th></tr></thead>
+<thead><tr><th>Time</th><th>Request</th><th>Duration</th><th>Outcome</th></tr></thead>
 <tbody>
 {{range .Spans}}
-<tr>
-  <td>{{ts .StartTime}}</td>
+<tr class="rowlink">
+  <td><a class="rowhit" href="/traces/{{.TraceID}}">open trace {{.TraceID}}</a>{{ts .StartTime}}</td>
   <td>
     {{if .HTTPMethod}}<b>{{.HTTPMethod}}</b>{{end}} {{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}
     {{if .StatusCode}}<span class="code {{if ge .StatusCode 500}}bad{{else if ge .StatusCode 400}}warn{{end}}">{{.StatusCode}}</span>{{end}}
@@ -994,7 +1013,7 @@ const operationsTemplate = `{{define "content"}}
   <td><a href="/traces/{{.TraceID}}">trace</a></td>
 </tr>
 {{else}}
-<tr><td colspan="5" class="dim">No operations in this window.</td></tr>
+<tr><td colspan="4" class="dim">No operations in this window.</td></tr>
 {{end}}
 </tbody>
 </table>
