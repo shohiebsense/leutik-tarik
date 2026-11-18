@@ -286,3 +286,60 @@ func pctWidth(frac float64) template.CSS {
 	}
 	return template.CSS(fmt.Sprintf("width:%.1f%%", frac*100))
 }
+
+// orderedRows flattens the span tree depth-first from the roots, children in
+// start order. Depth is the nesting level, so a query sits under the function
+// that executed it rather than next to whichever call happened to begin first.
+func orderedRows(spans []model.Span, traceStart time.Time) []traceRow {
+	children := map[string][]model.Span{}
+	var roots []model.Span
+	byID := map[string]model.Span{}
+	for _, s := range spans {
+		byID[s.SpanID] = s
+	}
+	for _, s := range spans {
+		if s.ParentSpanID == "" {
+			roots = append(roots, s)
+			continue
+		}
+		if _, ok := byID[s.ParentSpanID]; !ok {
+			// Orphan: its parent is missing from this trace, so it is a root for
+			// display purposes. Showing it beats hiding it.
+			roots = append(roots, s)
+			continue
+		}
+		children[s.ParentSpanID] = append(children[s.ParentSpanID], s)
+	}
+	sortSpans(roots)
+	for id := range children {
+		sortSpans(children[id])
+	}
+
+	rows := make([]traceRow, 0, len(spans))
+	var walk func(s model.Span, depth int)
+	walk = func(s model.Span, depth int) {
+		rows = append(rows, traceRow{
+			Span:   s,
+			Offset: s.StartTime.Sub(traceStart),
+			Depth:  depth,
+		})
+		for _, c := range children[s.SpanID] {
+			if depth < 64 { // bounded: a malformed trace must not recurse forever
+				walk(c, depth+1)
+			}
+		}
+	}
+	for _, r := range roots {
+		walk(r, 0)
+	}
+	return rows
+}
+
+func sortSpans(spans []model.Span) {
+	sort.SliceStable(spans, func(i, j int) bool {
+		if !spans[i].StartTime.Equal(spans[j].StartTime) {
+			return spans[i].StartTime.Before(spans[j].StartTime)
+		}
+		return spans[i].SpanID < spans[j].SpanID
+	})
+}

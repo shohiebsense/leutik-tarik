@@ -133,6 +133,16 @@ type traceRow struct {
 	Depth int
 }
 
+// spanDetail is one span plus its attributes, rendered as a block in call order.
+type spanDetail struct {
+	Name     string
+	Depth    int
+	Kind     string
+	Outcome  string
+	Duration string
+	Rows     []attrRow
+}
+
 // attrRow is one span attribute, flattened so the template can render a table
 // without iterating a map inside a range (which loses the span identity).
 type attrRow struct {
@@ -168,14 +178,10 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			start = s.StartTime
 		}
 	}
-	rows := make([]traceRow, len(spans))
-	for i, s := range spans {
-		rows[i] = traceRow{
-			Span:   s,
-			Offset: s.StartTime.Sub(start),
-			Depth:  depthOf(spans, s),
-		}
-	}
+	// Order by call hierarchy (depth-first from the roots), not by start time:
+	// sorting by clock interleaves sibling calls, so a query appears before the
+	// function that issued it and the stack has to be reconstructed by eye.
+	rows := orderedRows(spans, start)
 	var exact, correlated []model.LogEvent
 	for _, l := range logs {
 		if l.Exact {
@@ -184,25 +190,28 @@ func (u UI) Trace(w http.ResponseWriter, r *http.Request) {
 			correlated = append(correlated, l)
 		}
 	}
-	var attrs []attrRow
+	var details []spanDetail
 	for _, row := range rows {
 		keys := make([]string, 0, len(row.Span.Attributes))
 		for k := range row.Span.Attributes {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		for _, k := range keys {
-			attrs = append(attrs, attrRow{
-				Span:      row.Span.Name,
-				SpanShort: shorten(row.Span.Name, 28),
-				Key:       k,
-				Value:     row.Span.Attributes[k],
-			})
+		d := spanDetail{
+			Name:     row.Span.Name,
+			Depth:    row.Depth,
+			Kind:     row.Span.Kind,
+			Outcome:  row.Span.Outcome,
+			Duration: policy.HumanDuration(row.Span.Duration),
 		}
+		for _, k := range keys {
+			d.Rows = append(d.Rows, attrRow{Key: k, Value: row.Span.Attributes[k]})
+		}
+		details = append(details, d)
 	}
 
 	render(w, traceView, map[string]any{
-		"Attributes": attrs,
+		"Details":    details,
 		"Title":      "Trace " + traceID,
 		"TraceID":    traceID,
 		"Rows":       rows,
@@ -345,7 +354,13 @@ const pageShell = `{{define "page"}}<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — leutik-tarik</title>
 <style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:1.5rem;color:#111}
+html,body{margin:0;padding:0}
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;padding:1.25rem;box-sizing:border-box}
+.wrap{max-width:1600px;margin:0 auto}
+/* Anything wider than the viewport scrolls here instead of being clipped. */
+.content{overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.5rem}
+.content table{min-width:680px}
+.content svg{min-width:680px}
 table{border-collapse:collapse;width:100%;font-size:.875rem}
 th,td{border-bottom:1px solid #ddd;padding:.35rem .55rem;text-align:left;vertical-align:top}
 th{background:#f5f5f5;font-weight:600}
@@ -357,19 +372,43 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .dim{color:#666}
 .summary{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0 1rem}
 .summary div{min-width:9rem}
-.summary b{display:block;font-size:1.05rem}
+.summary b{display:block;font-size:1.05rem;overflow-wrap:anywhere}
+.summary div{min-width:0;max-width:100%}
 .bar{display:inline-block;width:70px;height:8px;background:#eee;border-radius:4px;vertical-align:middle;overflow:hidden}
 .bar .fill{display:block;height:8px;background:#1a7f37}
 .bar .fill.bad-bg{background:#b00020}
 .legend{font-size:.8rem;color:#666;margin:.3rem 0 .8rem}
 .zone{font-size:.75rem;color:#777;margin:-.4rem 0 .8rem}
+.spanblock{border-left:2px solid #e6e6e6;margin:.25rem 0 .25rem 0;padding:.15rem 0 .15rem .6rem}
+.spanblock.root{border-left:2px solid #bbb}
+.ind{display:inline-block}
+table.attrs{min-width:0;width:auto;margin:.25rem 0 .4rem}
+table.attrs td{padding:.15rem .5rem;border-bottom:1px dotted #eee;vertical-align:top}
+table.attrs td.key{white-space:nowrap;color:#444}
+table.attrs td.val{word-break:break-word;max-width:70ch}
+@media (max-width:700px){
+  body{padding:.75rem}
+  nav{display:flex;flex-wrap:wrap;gap:.25rem .9rem}
+  nav a{margin:0}
+  h1{font-size:1.4rem;word-break:break-word}
+  h2{font-size:1.15rem}
+  .summary{flex-direction:column;gap:.6rem}
+  .summary div{min-width:0;max-width:100%}
+  .summary b{overflow-wrap:anywhere;word-break:break-word}
+  table{font-size:.8rem}
+  th,td{padding:.3rem .4rem}
+}
 </style>
 </head>
 <body>
+<div class="wrap">
 <nav><a href="/operations">Operations</a><a href="/services">Services</a><a href="/incidents">Incidents</a><a href="/profiles">Profiles</a><a href="/policies">Policies</a></nav>
 <h1>{{.Title}}</h1>
 <p class="zone" id="zone">All times shown in {{.Zone}}</p>
+<div class="content">
 {{template "content" .}}
+</div>
+</div>
 </body>
 </html>{{end}}`
 
@@ -677,21 +716,31 @@ const traceTemplate = `{{define "content"}}
 <p class="dim">No log snapshot for this operation. Nothing is captured unless a trigger fires.</p>
 {{end}}
 
-{{if .Attributes}}
+{{if .Details}}
 <h2>Span data</h2>
-<p class="dim">Every attribute recorded for each span — parameters, statement, peer. This is the evidence behind the rows above.</p>
-<table>
-<thead><tr><th>Span</th><th>Attribute</th><th>Value</th></tr></thead>
-<tbody>
-{{range .Attributes}}
-<tr>
-  <td title="{{.Span}}">{{.SpanShort}}</td>
-  <td><code>{{.Key}}</code></td>
-  <td>{{.Value}}</td>
-</tr>
+<p class="dim">Attributes per span, in call order. A database call appears underneath the function that issued it, so the statement is attached to its caller rather than listed apart.</p>
+{{range .Details}}
+<details class="spanblock{{if eq .Depth 0}} root{{end}}" {{if lt .Depth 3}}open{{end}}>
+  <summary>
+    <span class="ind" style="{{indent .Depth}}"></span>
+    <b>{{.Name}}</b>
+    <span class="dim">{{.Duration}}</span>
+    {{if .Kind}}<span class="dim">· {{.Kind}}</span>{{end}}
+    {{if eq .Outcome "error"}}<span class="bad">· error</span>{{else if eq .Outcome "server_error"}}<span class="bad">· failed</span>{{end}}
+  </summary>
+  {{if .Rows}}
+  <table class="attrs">
+  <tbody>
+  {{range .Rows}}
+    <tr><td class="key"><code>{{.Key}}</code></td><td class="val">{{.Value}}</td></tr>
+  {{end}}
+  </tbody>
+  </table>
+  {{else}}
+  <p class="dim">No attributes recorded.</p>
+  {{end}}
+</details>
 {{end}}
-</tbody>
-</table>
 {{end}}
 
 <details>
