@@ -207,9 +207,13 @@ func traceHeadline(spans []model.Span, traceID string) (title, subtitle string, 
 		Email:     root.Attributes["enduser.email"],
 		Phone:     root.Attributes["enduser.phone_number"],
 		Payload:   root.Attributes["http.request.body"],
+		HasBody:   root.Attributes["http.request.body"] != "",
 		Headers:   requestHeaders(root.Attributes),
 		UserAgent: root.Attributes["user_agent.original"],
 		Service:   root.ServiceName,
+	}
+	if i := strings.IndexByte(req.Target, '?'); i >= 0 && i+1 < len(req.Target) {
+		req.Query = req.Target[i+1:]
 	}
 	if req.Method == "" && req.Route == "" && req.Target == "" {
 		req = nil
@@ -225,6 +229,12 @@ type traceRequest struct {
 	Phone    string
 	// Payload is the captured request body, already scrubbed at ingest.
 	Payload string
+	// HasBody distinguishes "no body was sent" from "the body was not captured",
+	// so the page can say which it is instead of rendering nothing.
+	HasBody bool
+	// Query is the raw query string from http.target, for requests that carry
+	// their data there instead of in a body.
+	Query string
 	// Headers are the incoming HTTP headers, minus the ones already shown.
 	Headers   []attrRow
 	Method    string
@@ -609,6 +619,8 @@ code{background:#f5f5f5;padding:.1rem .3rem}
 .reqstrip{margin:.2rem 0 .6rem;min-width:0}
 .reqstrip td{border:0;padding:.1rem 1.2rem .1rem 0;vertical-align:top}
 .payload{margin:.4rem 0 .8rem}
+.nobody{margin:0;padding:.5rem .7rem;background:#fbfbfb;border:1px dashed #d9dde1;border-radius:4px;color:#555;font-size:.85rem}
+.nobody code{background:#f0f2f4;padding:.05rem .3rem}
 .payload .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#888;margin-bottom:.15rem}
 .payload pre{
   margin:0;padding:.6rem .75rem;background:#f7f8f9;border:1px solid #e3e6e8;border-radius:4px;
@@ -1052,10 +1064,16 @@ const traceTemplate = `{{define "content"}}
 </table>
 {{end}}
 
-{{if .Payload}}
+{{if .Request}}
 <div class="payload">
-  <div class="k">request payload</div>
+  <div class="k">request body</div>
+  {{if .Payload}}
   <pre>{{.Payload}}</pre>
+  {{else}}
+  <p class="nobody">This request has no body payload{{if or (eq .Request.Method "GET") (eq .Request.Method "HEAD")}} — {{.Request.Method}} requests normally carry none{{end}}.
+    {{if .Request.Query}}<br>Its data is in the query string: <code>{{.Request.Query}}</code>{{else}}The caller sent no body and no query string for this request.{{end}}
+  </p>
+  {{end}}
 </div>
 {{end}}
 
