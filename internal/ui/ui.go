@@ -588,6 +588,7 @@ tr.rowlink:focus-within td{background:#eaf2fb;outline:1px solid #9cc0e8}
 .strip{display:flex;flex-wrap:wrap;gap:.4rem;margin:.1rem 0 .9rem}
 .strip a{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem;border:1px solid #e0e4e8;border-radius:12px;font-size:.8rem;text-decoration:none;color:#234}
 .strip a.on{background:#111;color:#fff;border-color:#111}
+.svc{display:inline-block;margin-left:.45rem;padding:.02rem .35rem;border-radius:3px;background:#f2f4f6;color:#5b6770;font-size:.72rem}
 .strip a .n{color:#888}
 .strip a.on .n{color:#cfcfcf}
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;padding:1.25rem;box-sizing:border-box}
@@ -1007,6 +1008,9 @@ const operationsTemplate = `{{define "content"}}
   <td>
     {{if .HTTPMethod}}<b>{{.HTTPMethod}}</b>{{end}} {{if .HTTPRoute}}{{.HTTPRoute}}{{else}}{{.Name}}{{end}}
     {{if .StatusCode}}<span class="code {{if ge .StatusCode 500}}bad{{else if ge .StatusCode 400}}warn{{end}}">{{.StatusCode}}</span>{{end}}
+    {{/* The service is only ambiguous when the list spans services: on a scoped
+         page every row would repeat the same name. */}}
+    {{if not $.Service}}<span class="svc">{{.ServiceName}}</span>{{end}}
   </td>
   <td>{{dur .Duration}}</td>
   <td class="{{if or (eq .Outcome "server_error") (eq .Outcome "error")}}bad{{else if eq .Outcome "client_error"}}warn{{else if or (eq .Outcome "success") (eq .Outcome "ok")}}good{{end}}">{{.Outcome}}</td>
