@@ -9,10 +9,8 @@
 -- * ReplacingMergeTree(ingested_at) dedupes on the sort key. span_id and
 --   start_time are part of it, and a redelivered span carries identical values
 --   for both, so retries collapse (measured: FINAL 1 row, plain count 2 until
---   a merge). Reads collapse them with `LIMIT 1 BY trace_id, span_id`.
---   Never FINAL on this table: it is not narrowed by the trace_id predicate
---   first, so a 9-row read merged 2.86M rows / 131 MB for 1.7s (measured
---   2026-11-18); LIMIT 1 BY read the same 9 rows in 0.11s.
+--   a merge). Single-trace reads therefore use FINAL; list reads use
+--   `LIMIT 1 BY trace_id, span_id`, which is cheaper than FINAL (measured 1).
 -- * non_replicated_deduplication_window makes insert_deduplication_token work
 --   on a non-replicated table; without it the token is ignored (measured).
 -- * RETENTION IS A COLUMN, NOT A RULE SET. Multiple `TTL ... DELETE WHERE`
