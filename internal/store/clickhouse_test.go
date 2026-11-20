@@ -94,8 +94,8 @@ func TestClickHouseInsertAndRead(t *testing.T) {
 	}
 }
 
-// A duplicate delivery must not double the rows. FINAL is what the detail page
-// uses, so that is what must be exact.
+// A duplicate delivery must not double the rows. The detail page reads the
+// trace directly, so that read must be exact.
 func TestClickHouseDeduplicatesRetries(t *testing.T) {
 	s := chStore(t)
 	ctx := context.Background()

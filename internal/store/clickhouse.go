@@ -175,8 +175,12 @@ func (c *ClickHouse) ListOperations(ctx context.Context, q Query) ([]model.Span,
 }
 
 func (c *ClickHouse) GetTrace(ctx context.Context, traceID string) ([]model.Span, error) {
-	// Narrow read, so FINAL is affordable here and gives exact dedup.
-	sql := fmt.Sprintf(`SELECT %s FROM spans FINAL WHERE trace_id = ? ORDER BY start_time LIMIT %d`,
+	// Not FINAL: it is not narrow at all. Measured on 16.5M spans, this read
+	// returned 9 rows but FINAL read 2.86M rows / 131 MB and took 1.7s, because
+	// FINAL merges every part before the trace_id predicate applies. LIMIT 1 BY
+	// on the same key the list read uses takes 0.11s and returns the same rows
+	// (a redelivered span carries identical values for span_id and start_time).
+	sql := fmt.Sprintf(`SELECT %s FROM spans WHERE trace_id = ? ORDER BY start_time LIMIT 1 BY trace_id, span_id LIMIT %d`,
 		rowColumns, MaxLimit)
 	return c.query(ctx, sql, []any{traceID})
 }
