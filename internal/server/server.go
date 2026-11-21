@@ -59,6 +59,10 @@ func NewWithOptions(o Options) http.Handler {
 		}))
 	}
 	u := ui.UI{Store: s, Policies: policies}
+	// Machine query API: read-only JSON views guarded by the ingest token.
+	mux.Handle("GET /v1/operations", requireIngest(QueryOperationsHandler{Store: s}))
+	mux.Handle("GET /v1/traces/{traceID}", requireIngest(QueryTraceHandler{Store: s}))
+
 	mux.HandleFunc("/policies", requireUI(u.PoliciesPage))
 	mux.HandleFunc("/services", requireUI(u.Services))
 	mux.HandleFunc("/services/{service}", requireUI(u.ServiceDetail))
