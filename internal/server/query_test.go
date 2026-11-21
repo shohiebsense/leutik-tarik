@@ -43,7 +43,7 @@ func TestQueryOperationsFiltersAndShapes(t *testing.T) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		Count      int `json:"count"`
+		Count      int        `json:"count"`
 		Operations []spanJSON `json:"operations"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {

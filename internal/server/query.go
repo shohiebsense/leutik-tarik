@@ -34,7 +34,7 @@ func toSpanJSON(s model.Span) spanJSON {
 		TraceID: s.TraceID, SpanID: s.SpanID, ParentSpanID: s.ParentSpanID,
 		Service: s.ServiceName, Name: s.Name, Kind: s.Kind,
 		Method: s.HTTPMethod, Route: s.HTTPRoute, Status: s.StatusCode,
-		Start: s.StartTime.Format(time.RFC3339Nano),
+		Start:      s.StartTime.Format(time.RFC3339Nano),
 		DurationMs: s.Duration.Milliseconds(),
 	}
 }
@@ -105,15 +105,15 @@ func (h QueryOperationsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		limit = n
 	}
 	q := store.Query{
-		Service: r.URL.Query().Get("service"),
-		Route:   r.URL.Query().Get("route"),
-		Method:  r.URL.Query().Get("method"),
-		Outcome: r.URL.Query().Get("outcome"),
-		Text:    r.URL.Query().Get("text"),
+		Service:           r.URL.Query().Get("service"),
+		Route:             r.URL.Query().Get("route"),
+		Method:            r.URL.Query().Get("method"),
+		Outcome:           r.URL.Query().Get("outcome"),
+		Text:              r.URL.Query().Get("text"),
 		IncludeBackground: r.URL.Query().Get("all") == "1",
-		From:    from,
-		To:      to,
-		Limit:   limit,
+		From:              from,
+		To:                to,
+		Limit:             limit,
 	}
 	spans, err := h.Store.ListOperations(r.Context(), q)
 	if err != nil {
