@@ -25,6 +25,7 @@ type spanJSON struct {
 	Method       string `json:"method"`
 	Route        string `json:"route"`
 	Status       int    `json:"status"`
+	Outcome      string `json:"outcome"`
 	Start        string `json:"start"`
 	DurationMs   int64  `json:"durationMs"`
 }
@@ -33,7 +34,7 @@ func toSpanJSON(s model.Span) spanJSON {
 	return spanJSON{
 		TraceID: s.TraceID, SpanID: s.SpanID, ParentSpanID: s.ParentSpanID,
 		Service: s.ServiceName, Name: s.Name, Kind: s.Kind,
-		Method: s.HTTPMethod, Route: s.HTTPRoute, Status: s.StatusCode,
+		Method: s.HTTPMethod, Route: s.HTTPRoute, Status: s.StatusCode, Outcome: s.Outcome,
 		Start:      s.StartTime.Format(time.RFC3339Nano),
 		DurationMs: s.Duration.Milliseconds(),
 	}
