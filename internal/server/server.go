@@ -58,7 +58,18 @@ func NewWithOptions(o Options) http.Handler {
 			Ring: o.Logs, Retention: o.LogRetention,
 		}))
 	}
-	u := ui.UI{Store: s, Policies: policies}
+	// The HTML pages read through a short TTL cache (their live views re-ask the
+	// same whole-window query on a fixed cadence, and every tab paid the full
+	// scan again); the machine API reads the store directly, so scripts and e2e
+	// runners always see fresh data.
+	uiStore := s
+	if readable, ok := s.(interface {
+		store.Store
+		store.Stats
+	}); ok {
+		uiStore = store.NewCachedReads(readable)
+	}
+	u := ui.UI{Store: uiStore, Policies: policies}
 	// Machine query API: read-only JSON views guarded by the ingest token.
 	mux.Handle("GET /v1/operations", requireIngest(QueryOperationsHandler{Store: s}))
 	mux.Handle("GET /v1/traces/{traceID}", requireIngest(QueryTraceHandler{Store: s}))

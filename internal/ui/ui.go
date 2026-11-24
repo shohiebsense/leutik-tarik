@@ -91,13 +91,33 @@ func (u UI) clock() time.Time {
 // reload, and reloading every 15s would make the page unreadable.
 const refreshSeconds = 60
 
-// livePollSeconds is how often a live window updates in place when JavaScript
-// is available. Deliberately a poll rather than a stream: a long-lived
-// connection would make the UI stateful, and this platform scales by adding
-// stateless replicas. At 5s the query (60ms) costs about 0.7s of database CPU
-// per minute per viewer, which is nothing, and the reader still sees a new
-// request within a few seconds.
+// livePollSeconds is how often the shortest live window updates in place when
+// JavaScript is available. Deliberately a poll rather than a stream: a
+// long-lived connection would make the UI stateful, and this platform scales
+// by adding stateless replicas. Longer windows poll far less often — see
+// pollIntervalFor — because their query cost grows with the window.
 const livePollSeconds = 5
+
+// pollIntervalFor is how often a live window refreshes in place, in seconds.
+// The cadence scales with the window because the query cost does: a 15m scan
+// answers in tens of milliseconds, but a 7d scan re-reads and re-sorts the
+// whole span table — seconds. Re-asking that every 5s per open tab kept
+// ClickHouse permanently busy, and every page load queued behind the backlog.
+// Even a 7d window stays live, at a 0.5% duty cycle.
+func pollIntervalFor(window time.Duration) int {
+	switch {
+	case window <= 15*time.Minute:
+		return livePollSeconds
+	case window <= time.Hour:
+		return 15
+	case window <= 6*time.Hour:
+		return 60
+	case window <= 24*time.Hour:
+		return 300
+	default:
+		return 900
+	}
+}
 
 // defaultWindow is the rolling window a bare /operations asks for.
 const defaultWindow = 15 * time.Minute
@@ -154,11 +174,12 @@ func windowURL(basePath string, in url.Values, from, to string) string {
 }
 
 // liveURL is the URL the page polls to refresh itself: same filters, rolling
-// window, never absolute times (those would freeze it on first poll).
+// window, never absolute times (those would freeze it on first poll) and never
+// a cursor (that would pin the poll to one page of history).
 func liveURL(basePath string, in url.Values, last string) string {
 	out := url.Values{}
 	for k, v := range in {
-		if k == "from" || k == "to" {
+		if k == "from" || k == "to" || k == "cursor" {
 			continue
 		}
 		out[k] = v
@@ -260,6 +281,22 @@ func withoutParam(basePath string, in url.Values, key string) string {
 	return basePath + "?" + out.Encode()
 }
 
+// pageURL returns the same page with a cursor set (any previous cursor
+// replaced), keeping every filter. Keyset, not offset: new arrivals shift an
+// offset while a start_time boundary stays put, so a reader paging back never
+// sees a row twice or misses one.
+func pageURL(basePath string, in url.Values, cursor time.Time) string {
+	out := url.Values{}
+	for k, v := range in {
+		if k == "cursor" {
+			continue
+		}
+		out[k] = v
+	}
+	out.Set("cursor", cursor.Format(time.RFC3339Nano))
+	return basePath + "?" + out.Encode()
+}
+
 // describeFilters is the sentence shown when a search matches nothing: it names
 // what was asked for, so "not found" cannot be confused with "not recorded".
 func describeFilters(in url.Values, last string) string {
@@ -333,21 +370,37 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 	if t, ok := parseTime(r.URL.Query().Get("to")); ok {
 		to, live = t, false
 	}
+	// A cursor pins the view to "older than this instant": paging, not a live
+	// window. Frozen pages never auto-refresh, so the reader keeps their place
+	// and the newest-first view is one click away.
+	if t, ok := parseTime(r.URL.Query().Get("cursor")); ok {
+		q.Cursor, live = t, false
+	}
 	last := durationParam(span)
 	if !live {
 		// A frozen window still needs a length for its labels.
 		last = ""
 	}
 	q.From, q.To = from, to
+	// A live view may be answered from the cache within its poll cadence; a
+	// frozen one is evidence and always reads through.
+	if live {
+		q.CacheTTL = store.CacheTTLFor(span)
+	}
 	fromStr, toStr := inDisplay(from).Format(inputTimeLayout), inDisplay(to).Format(inputTimeLayout)
 
 	// A live window also has to keep moving while it is open. Browsers without
 	// JavaScript get a document-level refresh inside <noscript>; everyone else
 	// gets an in-place update that swaps only the results, so the page does not
-	// reload, the scroll position survives and nothing flashes.
+	// reload, the scroll position survives and nothing flashes. The cadence is
+	// the window's own (pollIntervalFor): a 7d scan must not be re-asked every
+	// 5s, and a pinned page does not advance at all.
 	refresh, poll := 0, 0
 	if live {
-		refresh, poll = refreshSeconds, livePollSeconds
+		refresh, poll = refreshSeconds, pollIntervalFor(span)
+		if poll > refresh {
+			refresh = poll
+		}
 	}
 
 	// Every service in the window: once more than one service reports, a flat
@@ -372,6 +425,13 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		if s.Outcome == model.OutcomeError || s.Outcome == model.OutcomeServerError {
 			totalErrors++
 		}
+	}
+
+	// Paging is offered only when the page came back full: a short page is the
+	// end of the list, and a link to an empty page reads as a bug.
+	var olderURL string
+	if len(spans) == q.Limit {
+		olderURL = pageURL(basePath, r.URL.Query(), spans[len(spans)-1].StartTime)
 	}
 
 	render(w, r, operationsView, map[string]any{
@@ -402,6 +462,11 @@ func (u UI) Operations(w http.ResponseWriter, r *http.Request) {
 		"TotalSpans":     len(spans),
 		"TotalErrors":    totalErrors,
 		"PinnedURL":      windowURL(basePath, r.URL.Query(), fromStr, toStr),
+		// NewestURL exists only on a cursor-pinned page: it is the same filters
+		// back at the top of the list.
+		"OlderURL":  olderURL,
+		"NewestURL": withoutParam(basePath, r.URL.Query(), "cursor"),
+		"HasCursor": !q.Cursor.IsZero(),
 	})
 }
 
@@ -1622,6 +1687,12 @@ const operationsTemplate = `{{define "content"}}
 {{end}}
 </tbody>
 </table>
+{{if or .OlderURL .HasCursor}}
+<p class="dim">
+  {{if .HasCursor}}<a href="{{.NewestURL}}">↑ newest</a>{{if .OlderURL}} · {{end}}{{end}}
+  {{if .OlderURL}}<a href="{{.OlderURL}}">older →</a>{{end}}
+</p>
+{{end}}
 </section>
 {{end}}`
 

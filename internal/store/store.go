@@ -56,6 +56,12 @@ type Query struct {
 	Text string
 
 	Limit int
+
+	// CacheTTL is how long the UI's cached read path may answer this query from
+	// a previous identical one. Zero reads through — the machine API and frozen
+	// windows set nothing, because only the caller knows whether its view is
+	// live or pinned.
+	CacheTTL time.Duration
 }
 
 // MaxLimit caps every result set.
